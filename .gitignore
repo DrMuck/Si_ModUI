@@ -1,0 +1,8 @@
+# C# build artifacts
+**/bin/
+**/obj/
+.vs/
+*.user
+
+# Game and loader DLL references (not redistributable; copy from the Silica server / client install)
+include/

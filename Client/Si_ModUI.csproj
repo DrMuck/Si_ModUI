@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>Si_ModUI</AssemblyName>
+    <Version>1.1.0</Version>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
+    <NuGetAudit>false</NuGetAudit>
+    <ClientLoaderRoot Condition="'$(ClientLoaderRoot)' == ''">C:\SteamLibrary\steamapps\common\Silica\MelonLoader</ClientLoaderRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="../Shared/*.cs" />
+    <Reference Include="$(ClientLoaderRoot)/net6/MelonLoader.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/net6/0Harmony.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/net6/Il2CppInterop.Runtime.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/net6/Il2CppInterop.Common.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/Il2CppAssemblies/Il2CppSilicaCore.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/Il2CppAssemblies/Il2Cppmscorlib.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/Il2CppAssemblies/Il2Cppcom.rlabrecque.steamworks.net.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/Il2CppAssemblies/UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/Il2CppAssemblies/UnityEngine.IMGUIModule.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/Il2CppAssemblies/UnityEngine.UI.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/Il2CppAssemblies/UnityEngine.TextRenderingModule.dll" Private="false" />
+    <Reference Include="$(ClientLoaderRoot)/Il2CppAssemblies/Unity.InputSystem.dll" Private="false" />
+  </ItemGroup>
+</Project>
