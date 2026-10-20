@@ -16,7 +16,9 @@ namespace SiModUI
         // Choices: [value,label] pairs offered as a picker (stage "choice") for the first argument. Subs: sub-commands the registry
         // cannot see ("!spawn list", "!spawn save"), each with its own label, picker and admin flag; written by hand from the mod's
         // documentation for mods that have no ModUIData() export. Same shape as the export entries, minus the state.
-        public sealed class CommandConfig { public string Label; public string Description; public string Mod; public string Arg; public List<string[]> Choices; public List<SubConfig> Subs; }
+        // AdminOnly: a registered PLAYER command whose handler checks the admin power itself (Formation's tuning knobs); shown in the
+        // admin frames only, as an admin entry, and never to players.
+        public sealed class CommandConfig { public string Label; public string Description; public string Mod; public string Arg; public List<string[]> Choices; public List<SubConfig> Subs; public bool AdminOnly; }
         public sealed class SubConfig { public string Text; public string Label; public string Description; public bool Admin; public string Arg; public List<string[]> Choices; }
         private static readonly Dictionary<string, string> SeedArg = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {

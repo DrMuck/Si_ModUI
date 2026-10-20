@@ -9,7 +9,7 @@ using Newtonsoft.Json;
 using SilicaAdminMod;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(SiModUI.ServerMod), "Si_ModUI_Server", "1.1.0", "DrMuck, Davey")]
+[assembly: MelonInfo(typeof(SiModUI.ServerMod), "Si_ModUI_Server", "1.2.0", "DrMuck, Davey")]
 [assembly: MelonGame("Bohemia Interactive", "Silica")]
 [assembly: MelonPlatformDomain(MelonPlatformDomainAttribute.CompatibleDomains.MONO)]
 

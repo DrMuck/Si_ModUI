@@ -188,12 +188,12 @@ namespace SiModUI
             var byCallback = new Dictionary<MethodInfo, Cmd>();
             try
             {
-                foreach (var c in PlayerMethods.PlayerCommands.ToArray()) Add(mods, byCallback, cfg, c.PlayerCommandCallback, "/" + c.CommandName, false, Power.None, "");
-                foreach (var c in PlayerMethods.PlayerPhrases.ToArray()) Add(mods, byCallback, cfg, c.PlayerCommandCallback, c.CommandName, false, Power.None, "");
+                foreach (var c in PlayerMethods.PlayerCommands.ToArray()) Add(mods, byCallback, cfg, c.PlayerCommandCallback, "/" + c.CommandName, false, Power.None, "", admin);
+                foreach (var c in PlayerMethods.PlayerPhrases.ToArray()) Add(mods, byCallback, cfg, c.PlayerCommandCallback, c.CommandName, false, Power.None, "", admin);
                 if (admin)
                     foreach (var a in AdminMethods.AdminCommands.ToArray())
                         if (AdminMethods.PowerInPowers(a.AdminPower, powers))
-                            Add(mods, byCallback, cfg, a.AdminCallback, "!" + a.AdminCommandText, true, a.AdminPower, a.AdminCommandDescription);
+                            Add(mods, byCallback, cfg, a.AdminCallback, "!" + a.AdminCommandText, true, a.AdminPower, a.AdminCommandDescription, admin);
             }
             catch (Exception error) { MelonLogger.Warning("Frame build incomplete: " + error.GetBaseException().Message); }
 
@@ -222,12 +222,17 @@ namespace SiModUI
             return new Result { Root = root, Mods = mods };
         }
 
-        private static void Add(Dictionary<string, Mod> mods, Dictionary<MethodInfo, Cmd> byCallback, MenuConfig cfg, HelperMethods.CommandCallback callback, string text, bool admin, Power power, string description)
+        private static void Add(Dictionary<string, Mod> mods, Dictionary<MethodInfo, Cmd> byCallback, MenuConfig cfg, HelperMethods.CommandCallback callback, string text, bool admin, Power power, string description, bool viewerAdmin)
         {
             if (callback == null || string.IsNullOrEmpty(text)) return;
             string bare = text.TrimStart('/', '!', '.');
             if (bare.Length == 0 || NavCommand.IsMatch(bare)) return;                       // numbered menu navigation / vote options are not catalog entries
             if (cfg.Hidden.Any(h => h.Equals(text, StringComparison.OrdinalIgnoreCase) || h.Equals(bare, StringComparison.OrdinalIgnoreCase))) return;
+            if (!admin && cfg.Commands.TryGetValue(text, out var adminOnly) && adminOnly != null && adminOnly.AdminOnly)
+            {
+                if (!viewerAdmin) return;                                                     // menu.json AdminOnly: a player command whose handler is admin-gated
+                admin = true; power = Power.Generic;
+            }
             var method = callback.Method;
             if (byCallback.TryGetValue(method, out var existing))
             {
