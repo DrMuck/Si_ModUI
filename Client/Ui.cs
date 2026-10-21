@@ -869,6 +869,7 @@ public sealed partial class ClientMod
         if (pickerArgs.Count >= stages.Length) { pickerCmd = null; return; }
         if (stages.Length == 2 && pickerArgs.Count == 0 && stages.Contains("player", StringComparer.OrdinalIgnoreCase) && stages.Contains("team", StringComparer.OrdinalIgnoreCase)) { RenderMatrixPicker(rect, cmd, mod, stages); return; }
         string stage = stages[pickerArgs.Count].ToLowerInvariant();
+        if (stage == "text" || stage == "text?") { RenderTextStage(rect, cmd, mod, stages, stage == "text?"); return; }
         string what = stage == "map" ? "a map" : stage == "ban" ? "a banned player" : stage == "player" ? "a player" : stage == "team" ? "a team" : "an option";
         string collected = pickerArgs.Count > 0 ? " " + string.Join(" ", pickerArgs) : "";
         GUI.Label(new Rect(rect.x, rect.y, rect.width - 110, 30), cmd.Text + collected + "   choose " + what, titleStyle);
@@ -910,16 +911,42 @@ public sealed partial class ClientMod
             {
                 if (Button(new Rect(0, cy, rect.width - 24, 34), row.Value, false, ready))
                 {
-                    pickerArgs.Add(row.Key);
-                    if (pickerArgs.Count < stages.Length) { pickerScroll = Vector2.zero; return; }
-                    string text = cmd.Text + " " + string.Join(" ", pickerArgs);
-                    pickerCmd = null; pickerArgs.Clear(); AutoClose(mod); SendCommand(text, mod); return;
+                    pickerArgs.Add(row.Key); FinishStage(cmd, mod, stages); return;
                 }
                 cy += 40;
             }
             if (rows.Count == 0) GUI.Label(new Rect(4, 4, rect.width - 28, 40), empty, bodyStyle);
         }
         finally { GUI.EndScrollView(); }
+    }
+    // A typed stage ("text", or "text?" when it may be skipped): one field and OK; the value becomes the next token.
+    private string pickerInput = "";
+    private void RenderTextStage(Rect rect, Cmd cmd, Mod mod, string[] stages, bool optional)
+    {
+        string collected = pickerArgs.Count > 0 ? " " + string.Join(" ", pickerArgs) : "";
+        GUI.Label(new Rect(rect.x, rect.y, rect.width - 110, 30), cmd.Text + collected + "   type a value", titleStyle);
+        if (Button(new Rect(rect.xMax - 100, rect.y, 96, 32), pickerArgs.Count > 0 ? "BACK" : "CANCEL", style: tabStyle))
+        {
+            if (pickerArgs.Count > 0) pickerArgs.RemoveAt(pickerArgs.Count - 1); else pickerCmd = null;
+            return;
+        }
+        float y = rect.y + 40;
+        if (cmd.Desc.Length > 0) { float h = smallStyle.CalcHeight(new GUIContent(cmd.Desc), rect.width - 8); GUI.Label(new Rect(rect.x + 2, y, rect.width - 8, h), cmd.Desc, smallStyle); y += h + 6; }
+        bool ready = frameReady && pendingSeq < 0 && outgoing.Count == 0;
+        bool oldEnabled = GUI.enabled; GUI.enabled = oldEnabled && ready;
+        try { pickerInput = GUI.TextField(new Rect(rect.x, y, Math.Min(260, rect.width - 200), 32), pickerInput, 40, inputStyle); } finally { GUI.enabled = oldEnabled; }
+        string value = pickerInput.Trim().Replace(" ", "");
+        float bx = rect.x + Math.Min(260, rect.width - 200) + 10;
+        if (Button(new Rect(bx, y, 80, 32), "OK", false, ready && value.Length > 0, tabStyle)) { pickerArgs.Add(value); pickerInput = ""; FinishStage(cmd, mod, stages); return; }
+        if (optional && Button(new Rect(bx + 90, y, 80, 32), "SKIP", false, ready, tabStyle)) { pickerInput = ""; FinishStage(cmd, mod, stages, skipped: true); return; }
+    }
+    // After a stage: continue with the next one, or send the command once the chain is complete.
+    private void FinishStage(Cmd cmd, Mod mod, string[] stages, bool skipped = false)
+    {
+        int next = pickerArgs.Count + (skipped ? 1 : 0);
+        if (next < stages.Length && !skipped) { pickerScroll = Vector2.zero; return; }
+        string text = pickerArgs.Count > 0 ? cmd.Text + " " + string.Join(" ", pickerArgs) : cmd.Text;
+        pickerCmd = null; pickerArgs.Clear(); AutoClose(mod); SendCommand(text, mod);
     }
     // Player + team in one page: one row per player with a button per team of the match; a click sends both tokens in
     // the chain's order ("!team <player> <team>", "/elo seat <team> <player>").

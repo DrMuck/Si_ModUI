@@ -217,6 +217,7 @@ namespace SiModUI
                 if (mod.Cmds.Count == 0) { mods.Remove(mod.Id); continue; }
                 mod.Hash = ""; mod.Hash = Protocol.ShortHash(JsonConvert.SerializeObject(mod, Formatting.None));
             }
+            if (!admin) foreach (var mod in mods.Values) ScrubIdentities(mod);
             cfg.SaveIfDirty();
             string root = Protocol.ShortHash(string.Join("\n", mods.Values.OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => m.Id + ":" + m.Hash)));
             return new Result { Root = root, Mods = mods };
@@ -266,6 +267,26 @@ namespace SiModUI
             if (cmd.Arg == "map") cmd.Choices = MapChoices();
             else if (cmd.Arg == "ban") cmd.Choices = BanChoices();
             mod.Cmds.Add(cmd); byCallback[method] = cmd;
+        }
+        // Player frames must never carry Steam IDs (ban lists, bounty lists, pins). Admin entries are already dropped
+        // for players; this is the safety net for a mod that puts an ID into a player-visible label, choice, description,
+        // value or data document: the ID is replaced and the mod is named once in the log.
+        private static readonly Regex SteamId64 = new Regex(@"\b7656\d{13}\b", RegexOptions.Compiled);
+        private static void ScrubIdentities(Mod mod)
+        {
+            bool hit = false;
+            string Scrub(string text) { if (text == null || !SteamId64.IsMatch(text)) return text; hit = true; return SteamId64.Replace(text, "[id]"); }
+            foreach (var cmd in mod.Cmds)
+            {
+                cmd.Label = Scrub(cmd.Label); cmd.Desc = Scrub(cmd.Desc); cmd.Value = Scrub(cmd.Value);
+                if (cmd.Choices.Count > 0 && cmd.Choices.Any(c => c != null && c.Any(x => x != null && SteamId64.IsMatch(x)))) { cmd.Choices = new List<string[]>(); cmd.Arg = cmd.Arg == "choice" ? "" : cmd.Arg; hit = true; }
+            }
+            if (mod.Data != null)
+            {
+                string raw = mod.Data.ToString();
+                if (SteamId64.IsMatch(raw)) { mod.Data = new Newtonsoft.Json.Linq.JRaw(SteamId64.Replace(raw, "[id]")); hit = true; }
+            }
+            if (hit && providerWarned.Add(mod.Id + "#steamid")) MelonLogger.Warning("Player frame of " + mod.Id + " carried Steam IDs; they were removed. Put such data on admin entries only.");
         }
         // Mods that are not ours still describe their arguments in the registered description, databomb style:
         // "Usage: !team [optional:<player>] <teamname>", "!spawn <unit> on|off". Placeholders map to picker stages
