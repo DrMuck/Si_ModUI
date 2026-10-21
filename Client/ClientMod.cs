@@ -10,7 +10,7 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-[assembly: MelonInfo(typeof(SiModUI.ClientMod), "Si_ModUI", "1.2.1", "DrMuck, Davey")]
+[assembly: MelonInfo(typeof(SiModUI.ClientMod), "Si_ModUI", "1.3.1", "DrMuck, Davey")]
 [assembly: MelonGame("Bohemia Interactive", "Silica")]
 [assembly: MelonPlatform(MelonPlatformAttribute.CompatiblePlatforms.WINDOWS_X64)]
 [assembly: MelonPlatformDomain(MelonPlatformDomainAttribute.CompatibleDomains.IL2CPP)]
@@ -167,7 +167,16 @@ public sealed partial class ClientMod : MelonMod
                 ScanCredits(r.Lines);
                 if (pendingSilent) { PumpOutgoing(); return; }
                 status = r.Error.Length > 0 ? "Error: " + r.Error : r.Lines.Count == 0 ? "The server mod printed nothing for " + r.Cmd + "." : "";
-                if (pendingInline) { inlineReply = r; reply = null; PumpOutgoing(); break; }
+                // A brief answer without menu options ("Flex ON: ...", "State reset.") stays under the command list as a
+                // footer instead of replacing the list with a page: the user sees what happened without leaving the list.
+                bool brief = false;
+                try { brief = r.Error.Length == 0 && r.Lines.Count > 0 && r.Lines.Count <= 2 && r.Lines.All(l => ParseRow(l, replyMod?.Nav ?? "/").Opts.Count == 0); } catch { }
+                if (pendingInline || brief)
+                {
+                    inlineReply = r; reply = null;
+                    for (int i = 0; i < Math.Min(2, r.Lines.Count); i++) Write("  line " + i + ": " + Plain(r.Lines[i]).Trim());
+                    PumpOutgoing(); break;
+                }
                 reply = r; replyScroll = Vector2.zero;
                 for (int i = 0; i < Math.Min(4, r.Lines.Count); i++) Write("  line " + i + ": " + Plain(r.Lines[i]).Trim());
                 PumpOutgoing();

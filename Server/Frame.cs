@@ -31,6 +31,7 @@ namespace SiModUI
             // Display order inside the mod: registry commands sort by label (1000); a mod's exported list keeps its own order.
             [JsonProperty("o", DefaultValueHandling = DefaultValueHandling.Ignore)] [System.ComponentModel.DefaultValue(1000)] public int Order = 1000;
             [JsonIgnore] public MethodInfo Callback;
+            internal Cmd Clone() => (Cmd)MemberwiseClone();
         }
         internal sealed class Mod
         {
@@ -44,12 +45,15 @@ namespace SiModUI
             [JsonProperty("cmds")] public List<Cmd> Cmds = new List<Cmd>();
             // Optional structured data the mod exposes through `public static string ModUIData()` (e.g. the /buy catalog).
             [JsonProperty("data", NullValueHandling = NullValueHandling.Ignore)] public Newtonsoft.Json.Linq.JRaw Data;
+            internal Mod Clone() { var m = (Mod)MemberwiseClone(); m.Cmds = new List<Cmd>(Cmds); return m; }
         }
         internal sealed class Result { public string Root; public Dictionary<string, Mod> Mods; }
 
         // Mods may publish a JSON document for the client by exposing `public static string ModUIData()` on any type.
         // The lookup is by assembly name (= mod id); a failing or absent provider leaves the entry without data.
         private static readonly Dictionary<string, MethodInfo> providers = new Dictionary<string, MethodInfo>(StringComparer.OrdinalIgnoreCase);
+        // `public static string ModUIPlayerData(ulong steamId)` per mod: per-player values, see Personalize.
+        private static readonly Dictionary<string, MethodInfo> playerProviders = new Dictionary<string, MethodInfo>(StringComparer.OrdinalIgnoreCase);
         private static readonly HashSet<string> providerWarned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // The document may carry "commands": [{"t":"/rtsai status","l":"Status","d":"...","a":false,"arg":"","ch":[[value,label]]}]
         // for sub-commands the Admin Mod registry cannot see. They are merged into the mod's command list here, admin ones
@@ -138,9 +142,15 @@ namespace SiModUI
                         if (assembly == null || assembly.GetName().Name != id) continue;
                         foreach (var type in assembly.GetTypes())
                         {
+                            if (!playerProviders.ContainsKey(id))
+                            {
+                                var pm = type.GetMethod("ModUIPlayerData", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(ulong) }, null);
+                                if (pm != null && pm.ReturnType == typeof(string)) playerProviders[id] = pm;
+                            }
+                            if (method != null) continue;
                             var m = type.GetMethod("ModUIData", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null)
                                 ?? type.GetMethod("SquadHudData", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);   // pre-rename hook name
-                            if (m != null && m.ReturnType == typeof(string)) { method = m; break; }
+                            if (m != null && m.ReturnType == typeof(string)) method = m;
                         }
                         break;
                     }
@@ -175,9 +185,55 @@ namespace SiModUI
             if (now - cacheAt > 2) { cache.Clear(); cacheAt = now; }
             bool admin = player.IsAdmin();
             Power powers = admin ? player.GetAdminPowers() : Power.None;
-            if (cache.TryGetValue(powers, out var cached)) return cached;
-            var result = BuildFor(admin, powers);
-            cache[powers] = result; return result;
+            if (!cache.TryGetValue(powers, out var cached)) { cached = BuildFor(admin, powers); cache[powers] = cached; }
+            return Personalize(cached, player);
+        }
+
+        // Per-player state. A mod may expose `public static string ModUIPlayerData(ulong steamId)` returning
+        // {"v":{"<command text>":"<current value>"}}: those values replace the shared `v` of the named switch and value
+        // rows in this player's copy of the frame (Elo's /flex). The shared frame stays cached; only touched mods are
+        // cloned and rehashed, so the diff to the client is the one mod.
+        private static Result Personalize(Result shared, Player player)
+        {
+            if (playerProviders.Count == 0) return shared;
+            ulong steam;
+            try { steam = player.PlayerID.SteamID.m_SteamID; } catch { return shared; }
+            Dictionary<string, Mod> mods = null;
+            foreach (var kv in playerProviders.ToArray())
+            {
+                if (!shared.Mods.TryGetValue(kv.Key, out var mod)) continue;
+                Newtonsoft.Json.Linq.JObject doc;
+                try
+                {
+                    string json = kv.Value.Invoke(null, new object[] { steam }) as string;
+                    if (string.IsNullOrEmpty(json)) continue;
+                    doc = Newtonsoft.Json.Linq.JObject.Parse(json);
+                }
+                catch (Exception error)
+                {
+                    if (providerWarned.Add(kv.Key + "#player")) MelonLogger.Warning("ModUIPlayerData of " + kv.Key + " failed: " + error.GetBaseException().Message);
+                    continue;
+                }
+                if (!(doc["v"] is Newtonsoft.Json.Linq.JObject values) || !values.HasValues) continue;
+                Mod clone = null;
+                for (int i = 0; i < mod.Cmds.Count; i++)
+                {
+                    var c = mod.Cmds[i];
+                    var prop = values.Properties().FirstOrDefault(p => p.Name.Equals(c.Text, StringComparison.OrdinalIgnoreCase));
+                    if (prop == null || prop.Value.Type == Newtonsoft.Json.Linq.JTokenType.Null) continue;
+                    string v = prop.Value.ToString();
+                    if (v == c.Value) continue;
+                    if (clone == null) clone = mod.Clone();
+                    var pc = c.Clone(); pc.Value = v; clone.Cmds[i] = pc;
+                }
+                if (clone == null) continue;
+                clone.Hash = ""; clone.Hash = Protocol.ShortHash(JsonConvert.SerializeObject(clone, Formatting.None));
+                if (mods == null) mods = new Dictionary<string, Mod>(shared.Mods, StringComparer.OrdinalIgnoreCase);
+                mods[clone.Id] = clone;
+            }
+            if (mods == null) return shared;
+            string root = Protocol.ShortHash(string.Join("\n", mods.Values.OrderBy(m => m.Id, StringComparer.Ordinal).Select(m => m.Id + ":" + m.Hash)));
+            return new Result { Root = root, Mods = mods };
         }
 
         internal static Result BuildPublic() => BuildFor(false, Power.None);
@@ -264,8 +320,10 @@ namespace SiModUI
             cmd.Arg = cfg.ArgType(text) ?? "";
             if (cc?.Choices != null && cc.Choices.Count > 0) { cmd.Choices = cc.Choices; if (cmd.Arg.Length == 0) cmd.Arg = "choice"; }
             if (cmd.Arg.Length == 0 && cmd.Choices.Count == 0) InferArgs(cmd, description ?? "");
-            if (cmd.Arg == "map") cmd.Choices = MapChoices();
-            else if (cmd.Arg == "ban") cmd.Choices = BanChoices();
+            // server-fed stages anywhere in the chain ("map", "map,mode?", "ban"); "mode" reads the chosen map's row
+            var stageNames = cmd.Arg.Split(',').Select(s => s.Trim().TrimEnd('?').ToLowerInvariant()).ToList();
+            if (stageNames.Contains("map")) cmd.Choices = MapChoices();
+            else if (stageNames.Contains("ban")) cmd.Choices = BanChoices();
             mod.Cmds.Add(cmd); byCallback[method] = cmd;
         }
         // Player frames must never carry Steam IDs (ban lists, bounty lists, pins). Admin entries are already dropped
@@ -346,7 +404,10 @@ namespace SiModUI
                 {
                     if (level == null || !level.Enabled || !level.IsMultiplayer || level.IsDeveloperOnly || string.IsNullOrEmpty(level.FileName)) continue;
                     string label = Plain(level.DisplayName);
-                    result.Add(new[] { level.FileName, label.Length > 0 && label != level.FileName ? label + "  (" + level.FileName + ")" : level.FileName });
+                    // third element: the level's enabled game modes (ObjectName, comma separated) for a following "mode" stage
+                    string modes = "";
+                    try { if (level.GameModes != null) modes = string.Join(",", level.GameModes.Where(g => g != null && g.Enabled && !string.IsNullOrEmpty(g.ObjectName)).Select(g => g.ObjectName)); } catch { }
+                    result.Add(new[] { level.FileName, label.Length > 0 && label != level.FileName ? label + "  (" + level.FileName + ")" : level.FileName, modes });
                 }
             }
             catch (Exception error) { MelonLogger.Warning("Map list unavailable: " + error.GetBaseException().Message); }

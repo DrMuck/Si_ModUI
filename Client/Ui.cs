@@ -377,7 +377,7 @@ public sealed partial class ClientMod
     }
     private void RenderModList(Rect rect)
     {
-        var mods = ModsFor(category).ToList();
+        var mods = ModsFor(category).Where(m => category != "player" || IsEnabled(m)).ToList();   // switched-off mods: player tab hides them
         float rowHeight = 40, total = mods.Count * (rowHeight + 6);
         modScroll = GUI.BeginScrollView(rect, modScroll, new Rect(0, 0, rect.width - 20, Math.Max(total, 1)), false, total > rect.height);
         try
@@ -385,7 +385,7 @@ public sealed partial class ClientMod
             float y = 0;
             foreach (var mod in mods)
             {
-                string label = mod.Name + (mod.Id == "_match" ? "" : "  (" + mod.Cmds.Count(c => category == "admin" ? c.Admin : !c.Admin) + ")");
+                string label = mod.Name + (IsEnabled(mod) ? "" : "  (off)") + (mod.Id == "_match" ? "" : "  (" + mod.Cmds.Count(c => category == "admin" ? c.Admin : !c.Admin) + ")");
                 if (Button(new Rect(0, y, rect.width - 24, rowHeight), label, selectedMod == mod))
                 {
                     selectedMod = mod; reply = null; inlineReply = null; pickerCmd = null; status = ""; commandScroll = Vector2.zero;
@@ -517,6 +517,17 @@ public sealed partial class ClientMod
             }
             x += w + 8;
         }
+    }
+    // {"enabled":false} in a mod's data: the mod is switched off. The player tab hides it, the admin tab marks it "(off)".
+    private static bool IsEnabled(Mod mod)
+    {
+        try
+        {
+            if (mod?.Data != null && mod.Data.Value.ValueKind == JsonValueKind.Object && mod.Data.Value.TryGetProperty("enabled", out var e))
+                return e.ValueKind != JsonValueKind.False;
+        }
+        catch { }
+        return true;
     }
     // {"info":["line",...]} in a mod's data: status lines shown above its command list (for example the Elo switches).
     private static List<string> InfoLines(Mod mod)
@@ -868,16 +879,20 @@ public sealed partial class ClientMod
         var stages = Stages(cmd);
         if (pickerArgs.Count >= stages.Length) { pickerCmd = null; return; }
         if (stages.Length == 2 && pickerArgs.Count == 0 && stages.Contains("player", StringComparer.OrdinalIgnoreCase) && stages.Contains("team", StringComparer.OrdinalIgnoreCase)) { RenderMatrixPicker(rect, cmd, mod, stages); return; }
-        string stage = stages[pickerArgs.Count].ToLowerInvariant();
-        if (stage == "text" || stage == "text?") { RenderTextStage(rect, cmd, mod, stages, stage == "text?"); return; }
-        string what = stage == "map" ? "a map" : stage == "ban" ? "a banned player" : stage == "player" ? "a player" : stage == "team" ? "a team" : "an option";
+        string rawStage = stages[pickerArgs.Count].ToLowerInvariant();
+        bool optional = rawStage.EndsWith("?");                       // "<stage>?" may be skipped (must be the last stage)
+        string stage = rawStage.TrimEnd('?');
+        if (stage == "text") { RenderTextStage(rect, cmd, mod, stages, optional); return; }
+        string what = stage == "map" ? "a map" : stage == "mode" ? "a game mode" : stage == "ban" ? "a banned player" : stage == "player" ? "a player" : stage == "team" ? "a team" : "an option";
         string collected = pickerArgs.Count > 0 ? " " + string.Join(" ", pickerArgs) : "";
-        GUI.Label(new Rect(rect.x, rect.y, rect.width - 110, 30), cmd.Text + collected + "   choose " + what, titleStyle);
+        GUI.Label(new Rect(rect.x, rect.y, rect.width - 220, 30), cmd.Text + collected + "   choose " + what, titleStyle);
         if (Button(new Rect(rect.xMax - 100, rect.y, 96, 32), pickerArgs.Count > 0 ? "BACK" : "CANCEL", style: tabStyle))
         {
             if (pickerArgs.Count > 0) pickerArgs.RemoveAt(pickerArgs.Count - 1); else pickerCmd = null;
             return;
         }
+        bool readySkip = frameReady && pendingSeq < 0 && outgoing.Count == 0;
+        if (optional && Button(new Rect(rect.xMax - 206, rect.y, 100, 32), "DEFAULT", false, readySkip, tabStyle)) { FinishStage(cmd, mod, stages, skipped: true); return; }
         float y = rect.y + 40;
         var rows = new List<KeyValuePair<string, string>>();   // value to send, label
         string empty;
@@ -895,6 +910,7 @@ public sealed partial class ClientMod
             empty = "No players found.";
         }
         else if (stage == "team") { rows = TeamRows(); empty = "No teams in this match."; }
+        else if (stage == "mode") { rows = ModeRows(cmd, stages); empty = "This map lists no game modes; DEFAULT uses the map's first mode."; }
         else
         {
             foreach (var c in cmd.Choices) if (c != null && c.Length >= 2) rows.Add(new(c[0], c[1]));
@@ -918,6 +934,27 @@ public sealed partial class ClientMod
             if (rows.Count == 0) GUI.Label(new Rect(4, 4, rect.width - 28, 40), empty, bodyStyle);
         }
         finally { GUI.EndScrollView(); }
+    }
+    // "mode" stage: the game modes of the map chosen in the earlier "map" stage. The server lists them as the third
+    // element of that map's choice row ("MP_Strategy,MP_Siege"); the label drops the MP_ prefix.
+    private List<KeyValuePair<string, string>> ModeRows(Cmd cmd, string[] stages)
+    {
+        var rows = new List<KeyValuePair<string, string>>();
+        int mapStage = Array.FindIndex(stages, s => s.TrimEnd('?').Equals("map", StringComparison.OrdinalIgnoreCase));
+        if (mapStage < 0 || mapStage >= pickerArgs.Count) return rows;
+        string map = pickerArgs[mapStage];
+        foreach (var c in cmd.Choices)
+        {
+            if (c == null || c.Length < 3 || !c[0].Equals(map, StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (var mode in c[2].Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string m = mode.Trim(); if (m.Length == 0) continue;
+                string label = (m.StartsWith("MP_", StringComparison.OrdinalIgnoreCase) ? m.Substring(3) : m).Replace("_", " ");
+                rows.Add(new(m, label + "   (" + m + ")"));
+            }
+            break;
+        }
+        return rows;
     }
     // A typed stage ("text", or "text?" when it may be skipped): one field and OK; the value becomes the next token.
     private string pickerInput = "";

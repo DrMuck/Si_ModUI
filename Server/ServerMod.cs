@@ -9,7 +9,7 @@ using Newtonsoft.Json;
 using SilicaAdminMod;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(SiModUI.ServerMod), "Si_ModUI_Server", "1.2.0", "DrMuck, Davey")]
+[assembly: MelonInfo(typeof(SiModUI.ServerMod), "Si_ModUI_Server", "1.3.1", "DrMuck, Davey")]
 [assembly: MelonGame("Bohemia Interactive", "Silica")]
 [assembly: MelonPlatformDomain(MelonPlatformDomainAttribute.CompatibleDomains.MONO)]
 
@@ -168,7 +168,7 @@ namespace SiModUI
                 try
                 {
                     if (sub.HelloPending) { sub.HelloPending = false; PushFrame(sub, player, true); }
-                    if (sub.Pending.Count > 0 && now - sub.LastCommandAt >= 0.1f)
+                    if (sub.Pending.Count > 0 && now - sub.LastCommandAt >= 0.2f)
                     {
                         var command = sub.Pending.Dequeue(); sub.LastCommandAt = now; commandsRun++;
                         var lines = Proxy.Execute(player, command.Value, out string error);
