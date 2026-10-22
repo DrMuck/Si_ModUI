@@ -28,6 +28,8 @@ namespace SiModUI
             // Current state of a switch: with Choices it renders as one button per choice, the matching one highlighted,
             // a click sends Text + " " + value. Only mods set it (ModUIData "v").
             [JsonProperty("v", NullValueHandling = NullValueHandling.Ignore)] public string Value;
+            // Multi-select switch: Value lists every selected choice (comma separated), a click toggles one choice.
+            [JsonProperty("m", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Multi;
             // Display order inside the mod: registry commands sort by label (1000); a mod's exported list keeps its own order.
             [JsonProperty("o", DefaultValueHandling = DefaultValueHandling.Ignore)] [System.ComponentModel.DefaultValue(1000)] public int Order = 1000;
             [JsonIgnore] public MethodInfo Callback;
@@ -79,7 +81,8 @@ namespace SiModUI
                                 if (choice.Count >= 2) choices.Add(new[] { (string)choice[0] ?? "", (string)choice[1] ?? "" });
                         }
                         MergeEntry(mod, id, (string)entry["t"] ?? "", entry["a"] != null && (bool)entry["a"], admin,
-                            (string)entry["l"], (string)entry["d"], (string)entry["arg"], (string)entry["v"], choices, order);
+                            (string)entry["l"], (string)entry["d"], (string)entry["arg"], (string)entry["v"], choices, order,
+                            entry["m"] != null ? (bool?)(bool)entry["m"] : null);
                     }
                     doc.Remove("commands");
                 }
@@ -94,7 +97,7 @@ namespace SiModUI
         // One entry from a mod's export or from the menu.json manifest: a new sub-command of the mod, or decoration (label,
         // description, picker, state) of a command the registry already knows. It cannot turn a player command into an admin
         // one or vice versa. Null fields leave the existing value alone. Admin entries exist only in admin frames.
-        private static void MergeEntry(Mod mod, string source, string text, bool isAdmin, bool viewerAdmin, string label, string desc, string arg, string value, List<string[]> choices, int order)
+        private static void MergeEntry(Mod mod, string source, string text, bool isAdmin, bool viewerAdmin, string label, string desc, string arg, string value, List<string[]> choices, int order, bool? multi = null)
         {
             if (string.IsNullOrEmpty(text) || (isAdmin && !viewerAdmin) || !Protocol.ValidCommandText(text)) return;
             var cmd = mod.Cmds.FirstOrDefault(c => c.Text.Equals(text, StringComparison.OrdinalIgnoreCase));
@@ -110,6 +113,7 @@ namespace SiModUI
             if (desc != null) cmd.Desc = Plain(desc);
             if (arg != null) cmd.Arg = arg;
             if (value != null) cmd.Value = value;
+            if (multi != null) cmd.Multi = multi.Value;
             if (choices != null) { cmd.Choices = choices; if (cmd.Arg.Length == 0 && choices.Count > 0) cmd.Arg = "choice"; }
             if (fresh) mod.Cmds.Add(cmd);
         }
@@ -178,7 +182,10 @@ namespace SiModUI
         private static float cacheAt = -100;
 
         // After a command ran its mod's state may have changed: the next Build starts fresh so the switches update at once.
-        internal static void Invalidate() => cacheAt = -100;
+        internal static void Invalidate() { cacheAt = -100; playerCache.Clear(); }
+        // Per-player documents are refreshed at most once a minute (a Leaderboard stats table would otherwise rehash the
+        // mod after every kill); a command of any player clears the cache so its own state shows at once.
+        private static readonly Dictionary<string, KeyValuePair<float, string>> playerCache = new Dictionary<string, KeyValuePair<float, string>>();
         internal static Result Build(Player player)
         {
             float now = UnityEngine.Time.realtimeSinceStartup;
@@ -199,13 +206,17 @@ namespace SiModUI
             ulong steam;
             try { steam = player.PlayerID.SteamID.m_SteamID; } catch { return shared; }
             Dictionary<string, Mod> mods = null;
+            float now = UnityEngine.Time.realtimeSinceStartup;
             foreach (var kv in playerProviders.ToArray())
             {
                 if (!shared.Mods.TryGetValue(kv.Key, out var mod)) continue;
                 Newtonsoft.Json.Linq.JObject doc;
                 try
                 {
-                    string json = kv.Value.Invoke(null, new object[] { steam }) as string;
+                    string key = kv.Key + "|" + steam;
+                    string json;
+                    if (playerCache.TryGetValue(key, out var cached) && now - cached.Key < 60) json = cached.Value;
+                    else { json = kv.Value.Invoke(null, new object[] { steam }) as string; playerCache[key] = new KeyValuePair<float, string>(now, json); }
                     if (string.IsNullOrEmpty(json)) continue;
                     doc = Newtonsoft.Json.Linq.JObject.Parse(json);
                 }
@@ -214,17 +225,29 @@ namespace SiModUI
                     if (providerWarned.Add(kv.Key + "#player")) MelonLogger.Warning("ModUIPlayerData of " + kv.Key + " failed: " + error.GetBaseException().Message);
                     continue;
                 }
-                if (!(doc["v"] is Newtonsoft.Json.Linq.JObject values) || !values.HasValues) continue;
                 Mod clone = null;
-                for (int i = 0; i < mod.Cmds.Count; i++)
+                if (doc["v"] is Newtonsoft.Json.Linq.JObject values && values.HasValues)
+                    for (int i = 0; i < mod.Cmds.Count; i++)
+                    {
+                        var c = mod.Cmds[i];
+                        var prop = values.Properties().FirstOrDefault(p => p.Name.Equals(c.Text, StringComparison.OrdinalIgnoreCase));
+                        if (prop == null || prop.Value.Type == Newtonsoft.Json.Linq.JTokenType.Null) continue;
+                        string v = prop.Value.ToString();
+                        if (v == c.Value) continue;
+                        if (clone == null) clone = mod.Clone();
+                        var pc = c.Clone(); pc.Value = v; clone.Cmds[i] = pc;
+                    }
+                // per-player tables are appended to the mod's shared data document ("tables")
+                if (doc["tables"] is Newtonsoft.Json.Linq.JArray ptables && ptables.Count > 0)
                 {
-                    var c = mod.Cmds[i];
-                    var prop = values.Properties().FirstOrDefault(p => p.Name.Equals(c.Text, StringComparison.OrdinalIgnoreCase));
-                    if (prop == null || prop.Value.Type == Newtonsoft.Json.Linq.JTokenType.Null) continue;
-                    string v = prop.Value.ToString();
-                    if (v == c.Value) continue;
                     if (clone == null) clone = mod.Clone();
-                    var pc = c.Clone(); pc.Value = v; clone.Cmds[i] = pc;
+                    Newtonsoft.Json.Linq.JObject data;
+                    try { data = mod.Data?.Value != null ? Newtonsoft.Json.Linq.JObject.Parse(mod.Data.Value.ToString()) : new Newtonsoft.Json.Linq.JObject(); }
+                    catch { data = new Newtonsoft.Json.Linq.JObject(); }
+                    var all = data["tables"] as Newtonsoft.Json.Linq.JArray ?? new Newtonsoft.Json.Linq.JArray();
+                    foreach (var t in ptables) all.Add(t.DeepClone());
+                    data["tables"] = all;
+                    clone.Data = new Newtonsoft.Json.Linq.JRaw(JsonConvert.SerializeObject(data, Formatting.None));
                 }
                 if (clone == null) continue;
                 clone.Hash = ""; clone.Hash = Protocol.ShortHash(JsonConvert.SerializeObject(clone, Formatting.None));

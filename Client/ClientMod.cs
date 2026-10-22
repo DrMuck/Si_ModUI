@@ -10,7 +10,7 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-[assembly: MelonInfo(typeof(SiModUI.ClientMod), "Si_ModUI", "1.3.1", "DrMuck, Davey")]
+[assembly: MelonInfo(typeof(SiModUI.ClientMod), "Si_ModUI", "1.4.1", "DrMuck, Davey")]
 [assembly: MelonGame("Bohemia Interactive", "Silica")]
 [assembly: MelonPlatform(MelonPlatformAttribute.CompatiblePlatforms.WINDOWS_X64)]
 [assembly: MelonPlatformDomain(MelonPlatformDomainAttribute.CompatibleDomains.IL2CPP)]
@@ -32,6 +32,7 @@ public sealed partial class ClientMod : MelonMod
         [JsonPropertyName("ch")] public List<string[]> Choices { get; set; } = new();
         [JsonPropertyName("o")] public int Order { get; set; } = 1000;
         [JsonPropertyName("v")] public string Value { get; set; }   // switch state (with Choices): rendered as one button per choice
+        [JsonPropertyName("m")] public bool Multi { get; set; }     // multi-select switch: Value lists every selected choice (comma separated), a click toggles one
     }
     public sealed class Mod
     {

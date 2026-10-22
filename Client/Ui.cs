@@ -17,7 +17,8 @@ namespace SiModUI;
 public sealed partial class ClientMod
 {
     private sealed class WindowPos { public float X { get; set; } = .5f; public float Y { get; set; } = .5f; public float Width { get; set; } public float Height { get; set; } }
-    private sealed class Layout { public Dictionary<string, WindowPos> Windows { get; set; } = new(); }
+    // ModOrder: mod ids in the order the user dragged them, per "<server>|<tab>"; mods not listed follow in server order.
+    private sealed class Layout { public Dictionary<string, WindowPos> Windows { get; set; } = new(); public Dictionary<string, List<string>> ModOrder { get; set; } = new(); }
     // Option parsing. Inline forms "/1 Commanders /2 FPS players /0 close" (several per line) and line forms
     // "1. Sol", "[BAL] 2) Centauri", "[3] Alien". Leading [TAG] prefixes are ignored.
     private sealed class Opt { public string Send, Label, Value; public bool Param; }   // Param: "name = value" row that takes a value
@@ -261,7 +262,7 @@ public sealed partial class ClientMod
         EndWindowDrag(); layoutProfile = id; layout = new Layout();
         layoutPath = Path.Combine(MelonEnvironment.UserDataDirectory, "Si_ModUI", "layout-" + id + ".json");
         try { if (File.Exists(layoutPath)) layout = JsonSerializer.Deserialize<Layout>(File.ReadAllText(layoutPath)) ?? new Layout(); } catch (Exception error) { Error(error); layout = new Layout(); }
-        layout.Windows ??= new();
+        layout.Windows ??= new(); layout.ModOrder ??= new();
     }
     private Rect LayoutRect(string key, float width, float height, float x = .5f, float y = .5f, float minWidth = 300, float minHeight = 160)
     {
@@ -331,8 +332,24 @@ public sealed partial class ClientMod
         GUI.Label(new Rect(rect.x + 14, rect.y + 6, rect.width - 28, 26), text, bodyStyle);
     }
     private IEnumerable<Mod> ModsFor(string cat) => cat == "admin"
-        ? frame.Mods.Where(m => m.Cmds.Any(c => c.Admin)).OrderBy(m => m.Id == "_match" ? 0 : 1).ThenBy(m => m.Priority).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
-        : frame.Mods.Where(m => m.Id != "_match" && m.Category == cat && m.Cmds.Any(c => !c.Admin));
+        ? frame.Mods.Where(m => m.Cmds.Any(c => c.Admin)).OrderBy(m => m.Id == "_match" ? 0 : 1).ThenBy(m => OrderIndex(cat, m)).ThenBy(m => m.Priority).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
+        : frame.Mods.Where(m => m.Id != "_match" && m.Category == cat && m.Cmds.Any(c => !c.Admin)).OrderBy(m => OrderIndex(cat, m)).ThenBy(m => m.Priority).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase);
+    // user-dragged order of the mod list, kept per server and tab in the layout file; unlisted mods keep the server order after it
+    private string OrderKey(string cat) => serverId + "|" + cat;
+    private int OrderIndex(string cat, Mod m)
+    {
+        int i = layout?.ModOrder != null && layout.ModOrder.TryGetValue(OrderKey(cat), out var list) && list != null ? list.IndexOf(m.Id) : -1;
+        return i < 0 ? int.MaxValue : i;
+    }
+    private Mod dragMod; private Vector2 dragStart; private bool dragging; private int dropIndex = -1;
+    private void Reorder(List<Mod> mods, Mod mod, int index)
+    {
+        var ids = mods.Select(m => m.Id).ToList();
+        int from = ids.IndexOf(mod.Id); if (from < 0) return;
+        ids.RemoveAt(from); if (index > from) index--; index = Math.Clamp(index, 0, ids.Count); ids.Insert(index, mod.Id);
+        EnsureLayout(); layout.ModOrder[OrderKey(category)] = ids; layoutDirty = true; SaveLayout();
+        Write("Mod order (" + category + "): " + string.Join(", ", ids));
+    }
     private string CatName(string key, string fallback) => frame.Cats != null && frame.Cats.TryGetValue(key, out var name) && !string.IsNullOrEmpty(name) ? name : fallback;
 
     private void RenderMenu()
@@ -378,24 +395,50 @@ public sealed partial class ClientMod
     private void RenderModList(Rect rect)
     {
         var mods = ModsFor(category).Where(m => category != "player" || IsEnabled(m)).ToList();   // switched-off mods: player tab hides them
-        float rowHeight = 40, total = mods.Count * (rowHeight + 6);
+        float rowHeight = 40, step = rowHeight + 6, w = rect.width - 24;
+        bool custom = layout?.ModOrder != null && layout.ModOrder.ContainsKey(OrderKey(category));
+        float total = mods.Count * step + (custom ? 34 : 0);
         modScroll = GUI.BeginScrollView(rect, modScroll, new Rect(0, 0, rect.width - 20, Math.Max(total, 1)), false, total > rect.height);
         try
         {
+            // Drag to reorder: the raw event is read before the buttons consume it (mouse positions are scroll-content coordinates).
+            var e = Event.current;
+            bool mouseDown = e.type == EventType.MouseDown && e.button == 0, mouseUp = e.rawType == EventType.MouseUp, mouseDrag = e.type == EventType.MouseDrag;
+            Vector2 mouse = e.mousePosition;
             float y = 0;
-            foreach (var mod in mods)
+            for (int i = 0; i < mods.Count; i++)
             {
+                var mod = mods[i];
+                var row = new Rect(0, y, w, rowHeight);
+                if (mouseDown && row.Contains(mouse)) { dragMod = mod; dragStart = mouse; dragging = false; dropIndex = -1; }
+                if (dragging && dropIndex == i) GUI.Box(new Rect(0, y - 5, w, 4), GUIContent.none);
                 string label = mod.Name + (IsEnabled(mod) ? "" : "  (off)") + (mod.Id == "_match" ? "" : "  (" + mod.Cmds.Count(c => category == "admin" ? c.Admin : !c.Admin) + ")");
-                if (Button(new Rect(0, y, rect.width - 24, rowHeight), label, selectedMod == mod))
+                if (Button(row, label, selectedMod == mod) && !dragging)
                 {
                     selectedMod = mod; reply = null; inlineReply = null; pickerCmd = null; status = ""; commandScroll = Vector2.zero;
                     browseCommands = false; browseSection = browseUnit = -1; browseScroll = Vector2.zero;
                     var catalog = category == "admin" ? null : CatalogFor(mod);
                     if (catalog != null) { AutoClose(null); SendCommand(catalog.Command + " status", mod, silent: true); }   // one cheap call: the credits line is read from the reply
                 }
-                y += rowHeight + 6;
+                y += step;
             }
+            if (dragging && dropIndex == mods.Count) GUI.Box(new Rect(0, y - 5, w, 4), GUIContent.none);
+            if (custom && Button(new Rect(0, y + 2, w, 26), "reset order", false, true, tabStyle)) { layout.ModOrder.Remove(OrderKey(category)); layoutDirty = true; SaveLayout(); }
             if (mods.Count == 0) GUI.Label(new Rect(4, 4, rect.width - 28, 60), frameReady ? "Nothing here for your role." : "", smallStyle);
+            if (dragMod != null)
+            {
+                if (mouseDrag && !dragging && Math.Abs(mouse.y - dragStart.y) > 8) dragging = true;
+                if (dragging)
+                {
+                    dropIndex = Math.Clamp((int)Math.Round(mouse.y / step), 0, mods.Count);
+                    GUI.Label(new Rect(12, mouse.y - 14, w - 16, 28), "> " + dragMod.Name, bodyStyle);
+                }
+                if (mouseUp)
+                {
+                    if (dragging && dropIndex >= 0) Reorder(mods, dragMod, dropIndex);
+                    dragMod = null; dragging = false; dropIndex = -1;
+                }
+            }
         }
         finally { GUI.EndScrollView(); }
     }
@@ -411,6 +454,7 @@ public sealed partial class ClientMod
             float h = Math.Max(22, lineStyle.CalcHeight(new GUIContent(line), rect.width - 8));
             GUI.Label(new Rect(rect.x + 2, y, rect.width - 8, h), line, lineStyle); y += h + 2;
         }
+        foreach (var table in TablesFor(mod)) y = RenderTable(rect, y, table);
         GUI.Label(new Rect(rect.x, y + 4, 110, 28), "Arguments", smallStyle);
         bool old = GUI.enabled; GUI.enabled = old && frameReady;
         try { arguments = GUI.TextField(new Rect(rect.x + 110, y, rect.width - 110, 32), arguments, 120, inputStyle); } finally { GUI.enabled = old; }
@@ -496,11 +540,31 @@ public sealed partial class ClientMod
             AutoClose(mod); SendCommand(cmd.Text + " " + value, mod, inline: true);
         }
     }
+    private static bool ContainsValue(string[] set, string value)
+    {
+        for (int i = 0; i < set.Length; i++) if (set[i].Equals(value, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+    private static string ToggledSet(string[] set, string value, bool add)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < set.Length; i++)
+        {
+            if (set[i].Equals(value, StringComparison.OrdinalIgnoreCase)) continue;
+            if (sb.Length > 0) sb.Append(',');
+            sb.Append(set[i]);
+        }
+        if (add) { if (sb.Length > 0) sb.Append(','); sb.Append(value); }
+        return sb.ToString();
+    }
     private void RenderSwitch(Cmd cmd, Mod mod, float cy, float width, bool ready)
     {
         SwitchLayout(cmd, width, out bool oneLine, out _);
         string current = cmd.Value ?? "";
         if (optimistic.TryGetValue(cmd.Text, out var chosen) && clock.Elapsed.TotalSeconds - chosen.Value < 10) current = chosen.Key;
+        // Multi-select row ("m"): v lists every selected value, comma separated; a click toggles that value (the mod
+        // adds or removes it and the next frame carries the real set). Selected buttons stay clickable.
+        string[] selectedSet = cmd.Multi ? current.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries) : null;
         float labelW = bodyStyle.CalcSize(new GUIContent(cmd.Label)).x + 16;
         GUI.Label(new Rect(6, cy + 6, oneLine ? labelW : width - 12, 28), cmd.Label, bodyStyle);
         float x = oneLine ? labelW : 0, by = oneLine ? cy + 2 : cy + 32;
@@ -509,14 +573,71 @@ public sealed partial class ClientMod
             if (c == null || c.Length < 2) continue;
             float w = ChoiceWidth(c[1], width - 8);
             if (x > (oneLine ? labelW : 0) && x + w > width - 8) { by += 40; x = oneLine ? labelW : 0; }
-            bool selected = c[0].Equals(current, StringComparison.OrdinalIgnoreCase);
-            if (Button(new Rect(x, by, w, 34), selected ? "[ " + c[1] + " ]" : c[1], selected, ready && !selected))
+            bool selected = selectedSet == null ? c[0].Equals(current, StringComparison.OrdinalIgnoreCase) : ContainsValue(selectedSet, c[0]);
+            if (Button(new Rect(x, by, w, 34), selected ? "[ " + c[1] + " ]" : c[1], selected, ready && (!selected || cmd.Multi)))
             {
-                optimistic[cmd.Text] = new KeyValuePair<string, double>(c[0], clock.Elapsed.TotalSeconds);
+                string next = selectedSet == null ? c[0] : ToggledSet(selectedSet, c[0], !selected);
+                optimistic[cmd.Text] = new KeyValuePair<string, double>(next, clock.Elapsed.TotalSeconds);
                 AutoClose(mod); SendCommand(cmd.Text + " " + c[0], mod, inline: true);
             }
             x += w + 8;
         }
+    }
+    // {"tables":[{"n":title,"h":[headers],"r":[[cells],...]}]} in a mod's data (shared, or per player through
+    // ModUIPlayerData): grids shown above the command list, for example the Leaderboard's own stats.
+    private sealed class Table { public string Name = ""; public List<string> Headers = new(); public List<List<string>> Rows = new(); }
+    private static List<Table> TablesFor(Mod mod)
+    {
+        var tables = new List<Table>();
+        try
+        {
+            if (mod?.Data == null || mod.Data.Value.ValueKind != JsonValueKind.Object || !mod.Data.Value.TryGetProperty("tables", out var arr) || arr.ValueKind != JsonValueKind.Array) return tables;
+            foreach (var t in arr.EnumerateArray())
+            {
+                if (t.ValueKind != JsonValueKind.Object) continue;
+                var table = new Table();
+                if (t.TryGetProperty("n", out var n) && n.ValueKind == JsonValueKind.String) table.Name = Plain(n.GetString() ?? "");
+                if (t.TryGetProperty("h", out var h) && h.ValueKind == JsonValueKind.Array) foreach (var c in h.EnumerateArray()) table.Headers.Add(Plain(c.ToString()));
+                if (t.TryGetProperty("r", out var r) && r.ValueKind == JsonValueKind.Array)
+                    foreach (var row in r.EnumerateArray())
+                    {
+                        if (row.ValueKind != JsonValueKind.Array) continue;
+                        var cells = new List<string>(); foreach (var c in row.EnumerateArray()) cells.Add(Plain(c.ToString()));
+                        table.Rows.Add(cells);
+                    }
+                if (table.Rows.Count > 0 || table.Headers.Count > 0) tables.Add(table);
+            }
+        }
+        catch { }
+        return tables;
+    }
+    private float RenderTable(Rect rect, float y, Table t)
+    {
+        int cols = Math.Max(t.Headers.Count, t.Rows.Count > 0 ? t.Rows.Max(r => r.Count) : 0);
+        if (cols == 0) return y;
+        var widths = new float[cols];
+        for (int c = 0; c < cols; c++)
+        {
+            float w = c < t.Headers.Count ? smallStyle.CalcSize(new GUIContent(t.Headers[c])).x : 0;
+            foreach (var r in t.Rows) if (c < r.Count) w = Math.Max(w, bodyStyle.CalcSize(new GUIContent(r[c])).x);
+            widths[c] = w + 18;
+        }
+        float sum = widths.Sum(), avail = rect.width - 8;
+        if (sum > avail) for (int c = 0; c < cols; c++) widths[c] *= avail / sum;
+        if (t.Name.Length > 0) { GUI.Label(new Rect(rect.x + 2, y, rect.width - 8, 24), t.Name, lineStyle); y += 24; }
+        float x = rect.x + 2;
+        if (t.Headers.Count > 0)
+        {
+            for (int c = 0; c < cols; c++) { if (c < t.Headers.Count) GUI.Label(new Rect(x, y, widths[c], 22), t.Headers[c], smallStyle); x += widths[c]; }
+            y += 22;
+        }
+        foreach (var r in t.Rows)
+        {
+            x = rect.x + 2;
+            for (int c = 0; c < cols; c++) { if (c < r.Count) GUI.Label(new Rect(x, y, widths[c], 24), r[c], bodyStyle); x += widths[c]; }
+            y += 24;
+        }
+        return y + 8;
     }
     // {"enabled":false} in a mod's data: the mod is switched off. The player tab hides it, the admin tab marks it "(off)".
     private static bool IsEnabled(Mod mod)

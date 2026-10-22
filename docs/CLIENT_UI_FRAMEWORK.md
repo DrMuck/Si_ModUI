@@ -44,6 +44,7 @@ it only separates them visually.
 | Fields present | Kind | Render | Sends |
 |---|---|---|---|
 | `v` and `ch` | **Switch** | label + one button per choice, the one equal to `v` highlighted | `t + " " + value`, inline |
+| `v`, `ch` and `m: true` | **Multi-select** | like Switch, but `v` lists every selected value (comma separated) and each listed one is highlighted; selected buttons stay clickable | `t + " " + value`, inline; the mod toggles that value |
 | `v`, no `ch` | **Value** | label with current value, text field prefilled with `v`, SET | `t + " " + field`, inline |
 | `ch`, no `v` | **Choice** | one-stage picker with the choices | `t + " " + value`, page |
 | `arg` non-empty | **Chain** | one picker per stage (section 5) | `t + " " + tokens`, page |
@@ -66,7 +67,10 @@ Rules that follow from the table:
 Top to bottom, every element optional:
 
 1. `data.info` lines (status). Plain text, keep order.
-2. Default view, if the mod has one: `catalog` renders as a **grid** for the player's own
+2. `data.tables`: grids (`n` title, `h` headers, `r` rows of cells), columns sized by content and
+   scaled to the page width. Shared tables come from the mod's export, personal ones (a player's
+   own stats) from the per-player hook; the client does not distinguish them.
+3. Default view, if the mod has one: `catalog` renders as a **grid** for the player's own
    faction (one click = `cmd + " " + name`); `browse` renders as a **tree** (sections >
    entries > stat table). When a default view exists, the command list sits behind a
    COMMANDS button and the view behind a BROWSE / GRID button.
@@ -75,7 +79,9 @@ Top to bottom, every element optional:
 4. Inline reply footer (last inline reply, wrapped).
 
 Mod list: ordered by `prio` within the tab. Do not reorder by name. Do not hide mods without
-commands if they carry `data`. A mod whose `data.enabled` is `false` is switched off: the
+commands if they carry `data`. A client may let the user reorder the list (the reference client
+drags rows); that order is local state, stored per server and tab, never sent to the server,
+and mods the stored order does not know follow in server order. A mod whose `data.enabled` is `false` is switched off: the
 player tab hides it, the admin tab shows it with an "(off)" mark so it can be switched back on.
 
 Per-player rows: a switch or value row may arrive with `v` already personalised by the server
