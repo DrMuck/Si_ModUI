@@ -26,7 +26,61 @@ namespace SiModUI
             Installed = true;
         }
         private static bool ChatPrefix(Player __0, string[] __2) => !Capture(__0, __2);
-        private static bool ConsolePrefix(Player __0, string[] __1) => !Capture(__0, __1);
+
+        // Console sends: the Admin Mod splits a long message list into packets by its own size estimate, but the estimate
+        // misses the writer's debug name (GetGameByteStreamWriter(0, "Si_AdminMod::NetworkSendConsole", writeDebug: true)
+        // puts ~33 bytes into every packet) and never splits a single oversized string. A chunk that lands near the 2400-byte
+        // cap is truncated by the receiver and the client throws EndOfStreamException in NetworkLayer.ProcessMessage (seen
+        // 2026-10-23: the welcome banner with 40+ registered commands). Long lists are re-chunked here with a safe budget and
+        // sent through the Admin Mod's own packet writer; short lists are left to the Admin Mod.
+        private const int SafeChunkBytes = 1800;
+        private const int PacketHeaderBytes = 64;
+        private static readonly System.Reflection.MethodInfo consoleNetcode = AccessTools.Method(typeof(HelperMethods), "NetworkSendConsole_Netcode");
+        private static bool ConsolePrefix(Player __0, string[] __1)
+        {
+            if (Capture(__0, __1)) return false;
+            if (consoleNetcode == null || __1 == null || __1.Length == 0 || EstimateBytes(__1) <= SafeChunkBytes) return true;
+            foreach (var chunk in Chunks(__1))
+            {
+                try { consoleNetcode.Invoke(null, new object[] { __0, chunk }); }
+                catch (Exception e) { MelonLogger.Warning("Console chunk send failed: " + e.GetBaseException().Message); break; }
+            }
+            return false;
+        }
+        private static int Size(string s) => System.Text.Encoding.UTF8.GetByteCount(s ?? "") + 6;   // type tag + length + text + level byte
+        private static int EstimateBytes(string[] messages) { int n = PacketHeaderBytes; foreach (var s in messages) n += Size(s); return n; }
+        private static List<List<string>> Chunks(string[] messages)
+        {
+            var chunks = new List<List<string>>(); var cur = new List<string>(); int size = PacketHeaderBytes;
+            foreach (var raw in messages)
+                foreach (var piece in SplitBytes(raw ?? "", SafeChunkBytes - PacketHeaderBytes - 6))
+                {
+                    int ps = Size(piece);
+                    if (cur.Count > 0 && size + ps > SafeChunkBytes) { chunks.Add(cur); cur = new List<string>(); size = PacketHeaderBytes; }
+                    cur.Add(piece); size += ps;
+                }
+            if (cur.Count > 0) chunks.Add(cur);
+            return chunks;
+        }
+        private static IEnumerable<string> SplitBytes(string s, int maxBytes)
+        {
+            if (System.Text.Encoding.UTF8.GetByteCount(s) <= maxBytes) { yield return s; yield break; }
+            int start = 0;
+            while (start < s.Length)
+            {
+                int bytes = 0, end = start;
+                while (end < s.Length)
+                {
+                    int step = char.IsHighSurrogate(s[end]) && end + 1 < s.Length ? 2 : 1;
+                    int b = System.Text.Encoding.UTF8.GetByteCount(s.Substring(end, step));
+                    if (bytes + b > maxBytes) break;
+                    bytes += b; end += step;
+                }
+                if (end == start) end = start + 1;
+                yield return s.Substring(start, end - start);
+                start = end;
+            }
+        }
         private static bool Capture(Player recipient, string[] messages)
         {
             if (captureTarget == null || !ReferenceEquals(recipient, captureTarget)) return false;
