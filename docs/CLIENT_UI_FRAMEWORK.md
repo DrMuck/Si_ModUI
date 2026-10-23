@@ -69,7 +69,9 @@ Top to bottom, every element optional:
 1. `data.info` lines (status). Plain text, keep order.
 2. `data.tables`: grids (`n` title, `h` headers, `r` rows of cells), columns sized by content and
    scaled to the page width. Shared tables come from the mod's export, personal ones (a player's
-   own stats) from the per-player hook; the client does not distinguish them.
+   own stats) from the per-player hook; the client does not distinguish them. Info and tables
+   together may use at most half of the page; beyond that they scroll in their own area so the
+   Arguments field and the command list stay reachable (client 1.5.1).
 3. Default view, if the mod has one: `catalog` renders as a **grid** for the player's own
    faction (one click = `cmd + " " + name`; with `"all": true` one tab per faction, with
    `"admin": true` on the admin tab, item `label` shown when present, cost hidden when 0);

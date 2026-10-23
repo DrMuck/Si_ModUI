@@ -102,7 +102,7 @@ public sealed partial class ClientMod
     private CursorLockMode priorLock; private bool priorCursor;
     private string category = "player", arguments = "";
     private Mod selectedMod;
-    private Vector2 modScroll, commandScroll, replyScroll, infoScroll;
+    private Vector2 modScroll, commandScroll, replyScroll, infoScroll, headScroll;
     private Layout layout = new(); private string layoutPath = "", layoutProfile = "", movingWindow = ""; private bool layoutDirty, resizingWindow; private int dragControl;
 
     private static bool NativeTextInput() => UIManager.TextInputActive || DebugConsole.IsOpen;
@@ -415,7 +415,7 @@ public sealed partial class ClientMod
                 string label = mod.Name + (IsEnabled(mod) ? "" : "  (off)") + (mod.Id == "_match" ? "" : "  (" + mod.Cmds.Count(c => category == "admin" ? c.Admin : !c.Admin) + ")");
                 if (Button(row, label, selectedMod == mod) && !dragging)
                 {
-                    selectedMod = mod; reply = null; inlineReply = null; pickerCmd = null; status = ""; commandScroll = Vector2.zero;
+                    selectedMod = mod; reply = null; inlineReply = null; pickerCmd = null; status = ""; commandScroll = Vector2.zero; headScroll = Vector2.zero;
                     browseCommands = false; browseSection = browseUnit = -1; browseScroll = Vector2.zero;
                     var catalog = CatalogFor(mod);
                     if (catalog != null && catalog.Credits && catalog.Admin == (category == "admin")) { AutoClose(null); SendCommand(catalog.Command + " status", mod, silent: true); }   // one cheap call: the credits line is read from the reply
@@ -453,12 +453,22 @@ public sealed partial class ClientMod
             if ((hasBrowse || hasCatalog) && Button(new Rect(rect.xMax - 100, rect.y, 96, 32), hasBrowse ? "BROWSE" : "CATALOG", style: tabStyle)) { browseCommands = false; return; }
         }
         float y = rect.y + 36;
-        foreach (string line in InfoLines(mod))
+        // Info lines and tables (the mod's status block). When they would push the command list off the page they get
+        // their own scroll area capped at half the page, so the Arguments field and the commands stay reachable.
+        var info = InfoLines(mod); var tables = TablesFor(mod);
+        float headH = RenderHeader(new Rect(0, 0, rect.width, 0), 0, info, tables, draw: false);
+        float headMax = Math.Max(120, (rect.yMax - y) * 0.5f);
+        if (headH <= headMax) y = RenderHeader(rect, y, info, tables, draw: true);
+        else
         {
-            float h = Math.Max(22, lineStyle.CalcHeight(new GUIContent(line), rect.width - 8));
-            GUI.Label(new Rect(rect.x + 2, y, rect.width - 8, h), line, lineStyle); y += h + 2;
+            var hv = new Rect(rect.x, y, rect.width, headMax);
+            float hw = rect.width - 20;
+            float hh = RenderHeader(new Rect(0, 0, hw, 0), 0, info, tables, draw: false);
+            headScroll = GUI.BeginScrollView(hv, headScroll, new Rect(0, 0, hw, Math.Max(hh, 1)), false, true);
+            try { RenderHeader(new Rect(0, 0, hw, hh), 0, info, tables, draw: true); }
+            finally { GUI.EndScrollView(); }
+            y += headMax + 4;
         }
-        foreach (var table in TablesFor(mod)) y = RenderTable(rect, y, table);
         GUI.Label(new Rect(rect.x, y + 4, 110, 28), "Arguments", smallStyle);
         bool old = GUI.enabled; GUI.enabled = old && frameReady;
         try { arguments = GUI.TextField(new Rect(rect.x + 110, y, rect.width - 110, 32), arguments, 120, inputStyle); } finally { GUI.enabled = old; }
@@ -615,7 +625,19 @@ public sealed partial class ClientMod
         catch { }
         return tables;
     }
-    private float RenderTable(Rect rect, float y, Table t)
+    // info lines + tables; draw = false only measures and returns the end y
+    private float RenderHeader(Rect rect, float y, List<string> info, List<Table> tables, bool draw)
+    {
+        foreach (string line in info)
+        {
+            float h = Math.Max(22, lineStyle.CalcHeight(new GUIContent(line), rect.width - 8));
+            if (draw) GUI.Label(new Rect(rect.x + 2, y, rect.width - 8, h), line, lineStyle);
+            y += h + 2;
+        }
+        foreach (var table in tables) y = RenderTable(rect, y, table, draw);
+        return y;
+    }
+    private float RenderTable(Rect rect, float y, Table t, bool draw = true)
     {
         int cols = Math.Max(t.Headers.Count, t.Rows.Count > 0 ? t.Rows.Max(r => r.Count) : 0);
         if (cols == 0) return y;
@@ -628,17 +650,17 @@ public sealed partial class ClientMod
         }
         float sum = widths.Sum(), avail = rect.width - 8;
         if (sum > avail) for (int c = 0; c < cols; c++) widths[c] *= avail / sum;
-        if (t.Name.Length > 0) { GUI.Label(new Rect(rect.x + 2, y, rect.width - 8, 24), t.Name, lineStyle); y += 24; }
+        if (t.Name.Length > 0) { if (draw) GUI.Label(new Rect(rect.x + 2, y, rect.width - 8, 24), t.Name, lineStyle); y += 24; }
         float x = rect.x + 2;
         if (t.Headers.Count > 0)
         {
-            for (int c = 0; c < cols; c++) { if (c < t.Headers.Count) GUI.Label(new Rect(x, y, widths[c], 22), t.Headers[c], smallStyle); x += widths[c]; }
+            if (draw) for (int c = 0; c < cols; c++) { if (c < t.Headers.Count) GUI.Label(new Rect(x, y, widths[c], 22), t.Headers[c], smallStyle); x += widths[c]; }
             y += 22;
         }
         foreach (var r in t.Rows)
         {
             x = rect.x + 2;
-            for (int c = 0; c < cols; c++) { if (c < r.Count) GUI.Label(new Rect(x, y, widths[c], 24), r[c], bodyStyle); x += widths[c]; }
+            if (draw) for (int c = 0; c < cols; c++) { if (c < r.Count) GUI.Label(new Rect(x, y, widths[c], 24), r[c], bodyStyle); x += widths[c]; }
             y += 24;
         }
         return y + 8;
