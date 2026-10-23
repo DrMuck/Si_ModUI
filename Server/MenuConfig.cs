@@ -43,7 +43,7 @@ namespace SiModUI
 
         public bool Debug;
         public Dictionary<string, string> Categories = new Dictionary<string, string> { { "player", "Player" }, { "info", "Info" }, { "admin", "Admin" }, { "match", "Match control" } };
-        public List<string> MatchControl = new List<string> { "map", "nextmap", "endround", "endgame", "kick", "kickban", "ban", "banid", "unban", "mute", "unmute", "silence", "unsilence", "demote", "commander", "cban", "removecommanderban", "mutiny", "afk", "eject" };
+        public List<string> MatchControl = new List<string> { "map", "nextmap", "endround", "endgame", "kick", "kickban", "ban", "banid", "unban", "mute", "unmute", "silence", "unsilence", "demote", "commander", "cban", "removecommanderban", "mutiny", "afk", "eject", "slay" };
         // Formation registers its admin tuning as player commands and checks power inside the handler; keep them out of the player menu.
         public List<string> Hidden = new List<string> { "/formationsize", "/formationsizeglobal", "/formationsizecommander", "/Formationspeedcap", "/Formationtraveldistance", "/formationTravel", "/formationTolerance", "/FormationFallof", "/startdelayspeedlock", "/startdelaysoftlock", "/startdelaylock", "/startdelay", "/moduitest" };
         public Dictionary<string, ModConfig> Mods = new Dictionary<string, ModConfig>(StringComparer.OrdinalIgnoreCase);

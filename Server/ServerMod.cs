@@ -9,7 +9,7 @@ using Newtonsoft.Json;
 using SilicaAdminMod;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(SiModUI.ServerMod), "Si_ModUI_Server", "1.4.2", "DrMuck, Davey")]
+[assembly: MelonInfo(typeof(SiModUI.ServerMod), "Si_ModUI_Server", "1.4.3", "DrMuck, Davey")]
 [assembly: MelonGame("Bohemia Interactive", "Silica")]
 [assembly: MelonPlatformDomain(MelonPlatformDomainAttribute.CompatibleDomains.MONO)]
 
@@ -53,6 +53,10 @@ namespace SiModUI
             GameEvents.OnPlayerLeft += PlayerLeft;
             try { HelperMethods.RegisterAdminCommand("moduitest", HudTest, Power.Generic, "!moduitest [chat command] - dump your HUD frame to UserData/cfg/ModUI, or run a command through the HUD proxy and echo its captured reply"); }
             catch (Exception error) { LoggerInstance.Warning("!moduitest not registered: " + error.Message); }
+            // !slay <player>: kill that player's current unit (they respawn). No databomb mod has it; the Admin Mod reserves the
+            // Power.Slay level for it. Registered here so the Match control page gets a Slay button with the player picker.
+            try { HelperMethods.RegisterAdminCommand("slay", Slay, Power.Slay, "!slay <player> - kill that player's current unit (they respawn)"); }
+            catch (Exception error) { LoggerInstance.Warning("!slay not registered: " + error.Message); }
             LoggerInstance.Msg("READY - marker " + Protocol.Marker + ", config " + MenuConfig.Path);
         }
         private static bool frameLogged;
@@ -67,6 +71,23 @@ namespace SiModUI
                 instance?.LoggerInstance.Msg("  " + mod.Id + " [" + mod.Category + " " + mod.Priority + "] " + mod.Name + " " + mod.Version + ": " + string.Join(" ", mod.Cmds.Select(c => c.Text + (c.Aliases.Count > 0 ? "(" + string.Join(",", c.Aliases) + ")" : ""))));
         }
         // Test aid for admins before the client mod exists: exercises frame + proxy from an ordinary game client.
+        private static void Slay(Player caller, string args)
+        {
+            try
+            {
+                string rest = (args ?? "").Trim(); int space = rest.IndexOf(' ');
+                rest = space < 0 ? "" : rest.Substring(space + 1).Trim();
+                if (rest.Length == 0) { HelperMethods.SendChatMessageToPlayer(caller, "Usage: !slay <player>"); return; }
+                Player target = HelperMethods.FindTargetPlayer(rest);
+                if (target == null) { HelperMethods.SendChatMessageToPlayer(caller, "No unique player matches '" + rest + "'."); return; }
+                var unit = target.ControlledUnit;
+                if (unit == null) { HelperMethods.SendChatMessageToPlayer(caller, target.PlayerName + " has no unit right now."); return; }
+                unit.Suicide();   // server side: sets the (driven) unit's health to 0, a normal death with respawn
+                instance?.LoggerInstance.Msg("slay: " + (caller ? caller.PlayerName : "console") + " -> " + target.PlayerName);
+                HelperMethods.SendChatMessageToAll(HelperMethods.GetTeamColor(target) + target.PlayerName + "</color> was slain by an admin.");
+            }
+            catch (Exception error) { Report(error); HelperMethods.SendChatMessageToPlayer(caller, "slay failed: " + error.GetBaseException().Message); }
+        }
         private static void HudTest(Player caller, string args)
         {
             if (!caller) return;
