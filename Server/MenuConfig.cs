@@ -24,7 +24,7 @@ namespace SiModUI
         {
             { "!kick", "player" }, { "!kickban", "player" }, { "!ban", "player" }, { "!mute", "player" }, { "!unmute", "player" }, { "!silence", "player" }, { "!unsilence", "player" },
             { "!afk", "player" }, { "!eject", "player" }, { "!demote", "player" }, { "!cban", "player" }, { "!commanderban", "player" }, { "!cmdrban", "player" }, { "!removecommanderban", "player" },
-            { "!uncban", "player" }, { "!commander", "player" }, { "!team", "player,team" }, { "!slay", "player" }, { "!promote", "player" }, { "!transfer", "player" }, { "!map", "map" }, { "!unban", "ban" }
+            { "!uncban", "player" }, { "!commander", "player" }, { "!team", "player,team" }, { "!slay", "player" }, { "!promote", "player" }, { "!transfer", "player" }, { "!map", "map,mode?" }, { "/nominate", "map,mode?" }, { "!unban", "ban" }
         };
         internal string ArgType(string commandText)
         {
