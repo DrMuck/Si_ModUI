@@ -106,7 +106,9 @@ namespace ModUI
         public ModUIExport Value(string text, string label, string description, bool admin, double current)
             => Value(text, label, description, admin, current.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
 
-        // ---- catalog (Si_Buy): a button grid per faction, a click sends `command + " " + name` ----
+        // ---- catalog (Si_Buy, Si_Spawn): a button grid per faction, a click sends `command + " " + name`. Extras the
+        //      client understands: "admin": true (shown on the admin tab instead of the player tab), "all": true (faction
+        //      tabs instead of the viewer's own faction), "credits": false (no credits line / status call), "offText". ----
         public CatalogBuilder Catalog(string command, bool enabled = true) => new CatalogBuilder(this, command, enabled);
         public sealed class CatalogBuilder
         {
@@ -116,7 +118,10 @@ namespace ModUI
             { this.owner = owner; doc = new JObject { ["cmd"] = command, ["enabled"] = enabled, ["catalog"] = factions }; }
             public CatalogBuilder Faction(string name) { faction = new JArray(); factions[name] = faction; category = null; return this; }
             public CatalogBuilder Category(string name) { category = new JArray(); faction.Add(new JObject { ["c"] = name, ["u"] = category }); return this; }
-            public CatalogBuilder Item(string name, int cost) { category.Add(new JArray(name, cost)); return this; }
+            // An item is [name, cost] or [name, cost, label]: the client shows `label` (or the name) and sends `command + " " + name`;
+            // a cost of 0 or less is not shown.
+            public CatalogBuilder Item(string name, int cost, string label = null)
+            { category.Add(label == null || label == name ? new JArray(name, cost) : new JArray(name, cost, label)); return this; }
             public CatalogBuilder Extra(string key, JToken value) { doc[key] = value; return this; }
             public ModUIExport Done() { foreach (var p in doc.Properties()) owner.root[p.Name] = p.Value; return owner; }
         }

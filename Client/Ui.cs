@@ -387,7 +387,7 @@ public sealed partial class ClientMod
         RenderModList(listRect);
         if (pickerCmd != null) RenderPicker(pageRect);
         else if (reply != null) RenderReply(pageRect);
-        else if (selectedMod != null && category != "admin" && CatalogFor(selectedMod) != null) RenderCatalog(pageRect);
+        else if (selectedMod != null && !browseCommands && CatalogFor(selectedMod) is Catalog shownCatalog && shownCatalog.Admin == (category == "admin")) RenderCatalog(pageRect);
         else if (selectedMod != null && category != "admin" && !browseCommands && BrowseFor(selectedMod) != null) RenderBrowse(pageRect);
         else if (selectedMod != null) RenderCommands(pageRect);
         else GUI.Label(new Rect(pageRect.x + 8, pageRect.y + 8, pageRect.width - 16, 60), frameReady ? "Choose a mod on the left." : "Waiting for the server's mod list...", bodyStyle);
@@ -417,8 +417,8 @@ public sealed partial class ClientMod
                 {
                     selectedMod = mod; reply = null; inlineReply = null; pickerCmd = null; status = ""; commandScroll = Vector2.zero;
                     browseCommands = false; browseSection = browseUnit = -1; browseScroll = Vector2.zero;
-                    var catalog = category == "admin" ? null : CatalogFor(mod);
-                    if (catalog != null) { AutoClose(null); SendCommand(catalog.Command + " status", mod, silent: true); }   // one cheap call: the credits line is read from the reply
+                    var catalog = CatalogFor(mod);
+                    if (catalog != null && catalog.Credits && catalog.Admin == (category == "admin")) { AutoClose(null); SendCommand(catalog.Command + " status", mod, silent: true); }   // one cheap call: the credits line is read from the reply
                 }
                 y += step;
             }
@@ -447,7 +447,11 @@ public sealed partial class ClientMod
         var mod = selectedMod;
         bool admin = category == "admin";
         GUI.Label(new Rect(rect.x, rect.y, rect.width - 110, 30), mod.Name + (mod.Version.Length > 0 ? "  " + mod.Version : ""), titleStyle);
-        if (!admin && browseCommands && BrowseFor(mod) != null && Button(new Rect(rect.xMax - 100, rect.y, 96, 32), "BROWSE", style: tabStyle)) { browseCommands = false; return; }
+        if (browseCommands)
+        {
+            bool hasBrowse = !admin && BrowseFor(mod) != null, hasCatalog = CatalogFor(mod) is Catalog backCatalog && backCatalog.Admin == admin;
+            if ((hasBrowse || hasCatalog) && Button(new Rect(rect.xMax - 100, rect.y, 96, 32), hasBrowse ? "BROWSE" : "CATALOG", style: tabStyle)) { browseCommands = false; return; }
+        }
         float y = rect.y + 36;
         foreach (string line in InfoLines(mod))
         {
@@ -665,10 +669,27 @@ public sealed partial class ClientMod
 
     // ---- catalog view: a mod that publishes {"cmd","catalog":{faction:[{"c":category,"u":[[name,cost],...]}]}} gets a
     // two-level button grid instead of the command list; a click sends one direct command ("/buy Heavy Tank").
-    private sealed class CatalogCategory { public string Name = ""; public readonly List<KeyValuePair<string, int>> Units = new(); }
-    private sealed class Catalog { public string Command = "/buy"; public bool Enabled = true; public readonly Dictionary<string, List<CatalogCategory>> Factions = new(StringComparer.OrdinalIgnoreCase); }
+    // Items are [name, cost] or [name, cost, label]; extras: "admin" (admin tab), "all" (faction tabs), "credits": false, "offText".
+    private sealed class CatalogItem { public string Name = "", Label = ""; public int Cost; }
+    private sealed class CatalogCategory { public string Name = ""; public readonly List<CatalogItem> Units = new(); }
+    private sealed class Catalog
+    {
+        public string Command = "/buy", OffText = "The economy is switched off on this server.";
+        public bool Enabled = true, Admin, All, Credits = true;
+        public readonly List<string> FactionOrder = new();
+        public readonly Dictionary<string, List<CatalogCategory>> Factions = new(StringComparer.OrdinalIgnoreCase);
+    }
     private readonly Dictionary<string, Catalog> catalogs = new();   // keyed by mod id + hash
     private Vector2 catalogScroll;
+    private string catalogFaction = "";
+    private static string ItemLabel(CatalogItem item) => item.Cost > 0 ? item.Label + "  " + item.Cost.ToString(CultureInfo.InvariantCulture) + "cr" : item.Label;
+    private string CatalogFaction(Catalog catalog)
+    {
+        if (catalogFaction.Length > 0 && catalog.Factions.ContainsKey(catalogFaction)) return catalogFaction;
+        string local = LocalFaction();
+        if (local.Length > 0 && catalog.Factions.ContainsKey(local)) return local;
+        return catalog.FactionOrder.Count > 0 ? catalog.FactionOrder[0] : "";
+    }
     private Catalog CatalogFor(Mod mod)
     {
         if (mod == null || mod.Data == null) return null;
@@ -683,6 +704,10 @@ public sealed partial class ClientMod
                 result = new Catalog();
                 if (data.TryGetProperty("cmd", out var cmd) && cmd.ValueKind == JsonValueKind.String) result.Command = cmd.GetString() ?? "/buy";
                 if (data.TryGetProperty("enabled", out var enabled) && (enabled.ValueKind == JsonValueKind.True || enabled.ValueKind == JsonValueKind.False)) result.Enabled = enabled.GetBoolean();
+                if (data.TryGetProperty("admin", out var adminFlag) && adminFlag.ValueKind == JsonValueKind.True) result.Admin = true;
+                if (data.TryGetProperty("all", out var allFlag) && allFlag.ValueKind == JsonValueKind.True) result.All = true;
+                if (data.TryGetProperty("credits", out var creditsFlag) && creditsFlag.ValueKind == JsonValueKind.False) result.Credits = false;
+                if (data.TryGetProperty("offText", out var offText) && offText.ValueKind == JsonValueKind.String && (offText.GetString() ?? "").Length > 0) result.OffText = Plain(offText.GetString());
                 foreach (var faction in factions.EnumerateObject())
                 {
                     if (faction.Value.ValueKind != JsonValueKind.Array) continue;
@@ -695,11 +720,12 @@ public sealed partial class ClientMod
                         {
                             if (unit.ValueKind != JsonValueKind.Array || unit.GetArrayLength() < 2) continue;
                             string unitName = unit[0].GetString() ?? "";
-                            if (unitName.Length > 0 && unit[1].TryGetInt32(out int cost)) entry.Units.Add(new KeyValuePair<string, int>(unitName, cost));
+                            string unitLabel = unit.GetArrayLength() > 2 && unit[2].ValueKind == JsonValueKind.String ? Plain(unit[2].GetString() ?? "") : "";
+                            if (unitName.Length > 0 && unit[1].TryGetInt32(out int cost)) entry.Units.Add(new CatalogItem { Name = unitName, Cost = cost, Label = unitLabel.Length > 0 ? unitLabel : unitName });
                         }
                         if (entry.Units.Count > 0) list.Add(entry);
                     }
-                    if (list.Count > 0) result.Factions[faction.Name] = list;
+                    if (list.Count > 0) { result.Factions[faction.Name] = list; result.FactionOrder.Add(faction.Name); }
                 }
                 if (result.Factions.Count == 0) result = null;
             }
@@ -725,13 +751,32 @@ public sealed partial class ClientMod
     private void RenderCatalog(Rect rect)
     {
         var mod = selectedMod; var catalog = CatalogFor(mod);
-        string faction = LocalFaction();
-        GUI.Label(new Rect(rect.x, rect.y, rect.width - 4, 30), mod.Name + (faction.Length > 0 ? "   " + faction : ""), titleStyle);
+        string faction = catalog.All ? CatalogFaction(catalog) : LocalFaction();
+        GUI.Label(new Rect(rect.x, rect.y, rect.width - 4, 30), mod.Name + (!catalog.All && faction.Length > 0 ? "   " + faction : ""), titleStyle);
         float y = rect.y + 36, bw = Math.Min(150, (rect.width - 30) / 4);
         bool ready = frameReady && pendingSeq < 0 && outgoing.Count == 0;
-        GUI.Label(new Rect(rect.x, y + 4, 3 * bw, 28), "Credits: " + (credits >= 0 ? credits.ToString(CultureInfo.InvariantCulture) : "?"), bodyStyle);
+        if (catalog.Credits) GUI.Label(new Rect(rect.x, y + 4, 2 * bw, 28), "Credits: " + (credits >= 0 ? credits.ToString(CultureInfo.InvariantCulture) : "?"), bodyStyle);
+        if (Button(new Rect(rect.x + 2 * (bw + 10), y, bw, 34), "COMMANDS", false, true, tabStyle)) { browseCommands = true; return; }
         if (Button(new Rect(rect.x + 3 * (bw + 10), y, bw, 34), "CHAT MENU", false, ready, tabStyle)) { inlineReply = null; SendCommand(catalog.Command, mod); }
         y += 44;
+        if (catalog.All)
+        {
+            // one tab per faction the catalog carries (an admin spawning for any team), instead of the viewer's own faction
+            float fx = rect.x;
+            foreach (string f in catalog.FactionOrder)
+            {
+                float fw = Math.Min(bw, Math.Max(90, bodyStyle.CalcSize(new GUIContent(f)).x + 24));
+                if (fx > rect.x && fx + fw > rect.xMax) { fx = rect.x; y += 40; }
+                if (Button(new Rect(fx, y, fw, 32), f, faction.Equals(f, StringComparison.OrdinalIgnoreCase), true, tabStyle)) { catalogFaction = f; catalogScroll = Vector2.zero; }
+                fx += fw + 8;
+            }
+            y += 40;
+        }
+        foreach (string line in InfoLines(mod))
+        {
+            float h = Math.Max(22, lineStyle.CalcHeight(new GUIContent(line), rect.width - 8));
+            GUI.Label(new Rect(rect.x + 2, y, rect.width - 8, h), line, lineStyle); y += h + 2;
+        }
         // Footer: the last reply (purchase result / balance), kept under the grid so the grid never disappears.
         float footer = 0;
         var footerLines = new List<string>();
@@ -742,10 +787,10 @@ public sealed partial class ClientMod
             if (footerLines.Count > 4) footerLines.RemoveRange(0, footerLines.Count - 4);
             footer = FooterHeight(rect, footerLines) + 10;
         }
-        if (!catalog.Enabled) { GUI.Label(new Rect(rect.x, y, rect.width, 30), "The economy is switched off on this server.", smallStyle); y += 30; }
+        if (!catalog.Enabled) { GUI.Label(new Rect(rect.x, y, rect.width, 30), catalog.OffText, smallStyle); y += 30; }
         if (!catalog.Factions.TryGetValue(faction, out var categories))
         {
-            GUI.Label(new Rect(rect.x, y, rect.width - 8, 60), faction.Length == 0 ? "Join a team to see what you can buy." : "No catalog for " + faction + " on this server.", bodyStyle);
+            GUI.Label(new Rect(rect.x, y, rect.width - 8, 60), faction.Length == 0 ? (catalog.All ? "The catalog is empty." : "Join a team to see what you can buy.") : "No catalog for " + faction + " on this server.", bodyStyle);
             RenderFooter(rect, footerLines);
             return;
         }
@@ -763,10 +808,10 @@ public sealed partial class ClientMod
                 float ox = 0;
                 foreach (var unit in cat.Units)
                 {
-                    string label = unit.Key + "  " + unit.Value.ToString(CultureInfo.InvariantCulture) + "cr";
+                    string label = ItemLabel(unit);
                     float w = Math.Min(width - 8, Math.Max(120, bodyStyle.CalcSize(new GUIContent(label)).x + 28));
                     if (ox > 0 && ox + w > width - 8) { cy += 40; ox = 0; }
-                    if (Button(new Rect(ox, cy, w, 34), label, false, ready && catalog.Enabled)) { AutoClose(null); SendCommand(catalog.Command + " " + unit.Key, mod, inline: true); }
+                    if (Button(new Rect(ox, cy, w, 34), label, false, ready && catalog.Enabled)) { AutoClose(null); SendCommand(catalog.Command + " " + unit.Name, mod, inline: true); }
                     ox += w + 8;
                 }
                 cy += 46;
@@ -909,7 +954,7 @@ public sealed partial class ClientMod
         float ox = 0, rows = 1;
         foreach (var unit in cat.Units)
         {
-            string label = unit.Key + "  " + unit.Value.ToString(CultureInfo.InvariantCulture) + "cr";
+            string label = ItemLabel(unit);
             float w = Math.Min(width, Math.Max(120, bodyStyle.CalcSize(new GUIContent(label)).x + 28));
             if (ox > 0 && ox + w > width) { rows++; ox = 0; }
             ox += w + 8;

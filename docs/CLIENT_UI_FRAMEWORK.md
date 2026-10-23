@@ -28,7 +28,7 @@ Three consequences:
 Frame
  └ Mod (id, name, ver, cat, prio, nav, hash, data?)
     ├ data.info[]        status lines
-    ├ data.catalog       faction > category > [name, cost]
+    ├ data.catalog       faction > category > [name, cost, label?]  (+ admin, all, credits, offText flags)
     ├ data.browse        section > entry > group > [label, value, vanilla?, note?]
     └ cmds[] (ordered by o)
        └ Entry (t, l, d, a, p, x, arg, ch, v, o)
@@ -71,9 +71,11 @@ Top to bottom, every element optional:
    scaled to the page width. Shared tables come from the mod's export, personal ones (a player's
    own stats) from the per-player hook; the client does not distinguish them.
 3. Default view, if the mod has one: `catalog` renders as a **grid** for the player's own
-   faction (one click = `cmd + " " + name`); `browse` renders as a **tree** (sections >
-   entries > stat table). When a default view exists, the command list sits behind a
-   COMMANDS button and the view behind a BROWSE / GRID button.
+   faction (one click = `cmd + " " + name`; with `"all": true` one tab per faction, with
+   `"admin": true` on the admin tab, item `label` shown when present, cost hidden when 0);
+   `browse` renders as a **tree** (sections > entries > stat table). When a default view
+   exists, the command list sits behind a COMMANDS button and the view behind a
+   BROWSE / CATALOG button.
 3. Command list, ordered by `o` ascending (exports keep their order, registry commands are
    1000 and come last), player entries first, then a divider, then admin entries.
 4. Inline reply footer (last inline reply, wrapped).
