@@ -61,6 +61,11 @@ Rules that follow from the table:
   a document (status, list, menu).
 - `x` are aliases: show them on the info tab, never render them as separate buttons.
 - `p` is the power name for display only.
+- `i: true` is orthogonal to the kind: the entry is a read-only report (status, help, top
+  list). The server sets it from the export (`Report`), `menu.json` (`Info`) or its own
+  heuristic (text, label, description words). The chat directory `/mods` lists a mod under
+  "do and adjust" when it has at least one non-`i` player entry and under "info" otherwise;
+  a client may split its player tab the same way. Absent = action.
 
 ## 4. Mod page layout
 
@@ -111,6 +116,7 @@ options open the reply page.
 | `ban` | server-sent `ch` | Steam64 ID (admin frames only) |
 | `choice` | `ch` on the entry | value |
 | `text` | typed, OK | the text |
+| `players` | players on the server (client side), any number ticked, NEXT | one token per ticked player, space separated, in tick order (client 1.5.4) |
 
 A trailing `?` on any stage (`text?`, `mode?`) makes it optional: the client offers DEFAULT
 (or SKIP for text) and sends the command without that token. An optional stage must be last.
@@ -190,6 +196,10 @@ These are the export rules the server cannot enforce; breaking them shows up as 
   authorise anything. Authorisation stays in the mod's handler, which runs for the real
   sender exactly as it does for typed chat.
 - **`info` is status, not help.** Up to about five short lines; help goes in `d`.
+- **Flag reports.** Use `Report(...)` (`i: true`) for entries that only show something, so
+  `/mods` and the clients do not list a status command among the actions. The server's
+  heuristic covers the usual words (`status`, `top`, `Show ...`, `Your ...`); anything
+  else needs the flag or a `menu.json` `Info` entry.
 - **Idempotent and cheap.** The frame is rebuilt after every command; an export that takes
   longer than a few ms should cache on its own state (Unit Balance caches on config mtime).
 

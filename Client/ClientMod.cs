@@ -10,7 +10,7 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-[assembly: MelonInfo(typeof(SiModUI.ClientMod), "Si_ModUI", "1.5.1", "DrMuck, Davey")]
+[assembly: MelonInfo(typeof(SiModUI.ClientMod), "Si_ModUI", "1.5.4", "DrMuck, Davey")]
 [assembly: MelonGame("Bohemia Interactive", "Silica")]
 [assembly: MelonPlatform(MelonPlatformAttribute.CompatiblePlatforms.WINDOWS_X64)]
 [assembly: MelonPlatformDomain(MelonPlatformDomainAttribute.CompatibleDomains.IL2CPP)]
@@ -106,6 +106,9 @@ public sealed partial class ClientMod : MelonMod
         catch (Exception error) { LoggerInstance.Warning("Session log unavailable: " + error.Message); }
         var prefs = MelonPreferences.CreateCategory("Si_ModUI");
         fontPreference = prefs.CreateEntry("FontSize", 17);
+        // 10..70: how far buttons, tabs and highlights move from the panel colour towards the team accent (percent).
+        // Higher = lighter, more contrast against the dark panel; 35 is the default after the 1.5.2 brightening.
+        contrastPreference = prefs.CreateEntry("Contrast", 35);
         Write("READY - F6 opens the mod menu. Marker " + Protocol.Marker + (networkEnabled ? "" : " (transport disabled: packet 126 is defined by this game build)"));
     }
     public override void OnDeinitializeMelon() { ClosePanel(); ResetAppearance(); networkEnabled = false; log?.Dispose(); log = null; instance = null; }

@@ -9,7 +9,7 @@ using Newtonsoft.Json;
 using SilicaAdminMod;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(SiModUI.ServerMod), "Si_ModUI_Server", "1.4.4", "DrMuck, Davey")]
+[assembly: MelonInfo(typeof(SiModUI.ServerMod), "Si_ModUI_Server", "1.5.2", "DrMuck, Davey")]
 [assembly: MelonGame("Bohemia Interactive", "Silica")]
 [assembly: MelonPlatformDomain(MelonPlatformDomainAttribute.CompatibleDomains.MONO)]
 
@@ -57,6 +57,15 @@ namespace SiModUI
             // Power.Slay level for it. Registered here so the Match control page gets a Slay button with the player picker.
             try { HelperMethods.RegisterAdminCommand("slay", Slay, Power.Slay, "!slay <player> - kill that player's current unit (they respawn)"); }
             catch (Exception error) { LoggerInstance.Warning("!slay not registered: " + error.Message); }
+            // /mods: chat directory of the server's mods for players without the client mod (see ModsCommand.cs); its
+            // numbered navigation (/1, /back, /0) rides on the Admin Mod's chat event like the /buy menu does.
+            try
+            {
+                PlayerMethods.RegisterPlayerCommand("mods", ModsCommand.Run, true);
+                Event_Chat.OnRequestPlayerChat -= ModsCommand.OnChat;
+                Event_Chat.OnRequestPlayerChat += ModsCommand.OnChat;
+            }
+            catch (Exception error) { LoggerInstance.Warning("/mods not registered: " + error.Message); }
             LoggerInstance.Msg("READY - marker " + Protocol.Marker + ", config " + MenuConfig.Path);
         }
         private static bool frameLogged;
@@ -116,11 +125,27 @@ namespace SiModUI
             }
             catch (Exception error) { Report(error); HelperMethods.SendChatMessageToPlayer(caller, "moduitest failed: " + error.GetBaseException().Message); }
         }
-        public override void OnSceneWasLoaded(int index, string name) { subscribers.Clear(); outbox.Clear(); }
-        public override void OnDeinitializeMelon() { enabled = false; subscribers.Clear(); outbox.Clear(); GameEvents.OnPlayerLeft -= PlayerLeft; }
+        public override void OnSceneWasLoaded(int index, string name) { subscribers.Clear(); outbox.Clear(); ModsCommand.Clear(); deferred.Clear(); }
+        public override void OnDeinitializeMelon() { enabled = false; subscribers.Clear(); outbox.Clear(); GameEvents.OnPlayerLeft -= PlayerLeft; Event_Chat.OnRequestPlayerChat -= ModsCommand.OnChat; }
+        // Chat commands a menu wants to run on a player's behalf (/mods "/3" -> "/elo top"): dispatched from the next
+        // update through the Admin Mod's own entry point, never nested inside the chat event that asked for it.
+        private static readonly Queue<KeyValuePair<Player, string>> deferred = new Queue<KeyValuePair<Player, string>>();
+        internal static void RunLater(Player player, string text) { if (player && !string.IsNullOrEmpty(text)) deferred.Enqueue(new KeyValuePair<Player, string>(player, text)); }
+        private static void RunDeferred()
+        {
+            int budget = 8;
+            while (deferred.Count > 0 && budget-- > 0)
+            {
+                var item = deferred.Dequeue();
+                if (!item.Key) continue;
+                try { Event_Chat.FireOnRequestPlayerChatEvent(item.Key, item.Value, false); }
+                catch (Exception error) { Report(error); }
+            }
+        }
         private static void PlayerLeft(Player player)
         {
             if (!player) return;
+            try { ModsCommand.Forget(player.PlayerID.SteamID.m_SteamID); } catch { }
             foreach (var key in subscribers.Where(p => p.Value.Peer.SteamID.m_SteamID == player.PlayerID.SteamID.m_SteamID && p.Value.Channel == player.PlayerChannel).Select(p => p.Key).ToArray())
             { subscribers.Remove(key); instance?.LoggerInstance.Msg("Client left: " + key); }
         }
@@ -181,6 +206,7 @@ namespace SiModUI
         {
             if (!enabled || !Game.GetIsServer() || Game.GetIsClient()) return;
             float now = Time.realtimeSinceStartup;
+            if (deferred.Count > 0) RunDeferred();
             if (!frameLogged && PlayerMethods.PlayerCommands != null && AdminMethods.AdminCommands != null) { try { LogPublicFrame(); } catch (Exception error) { frameLogged = true; Report(error); } }
             foreach (var sub in subscribers.Values.ToArray())
             {

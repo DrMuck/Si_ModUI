@@ -92,11 +92,12 @@ public sealed partial class ClientMod
     }
     private Rect voteRect;
 
-    private MelonPreferences_Entry<int> fontPreference;
+    private MelonPreferences_Entry<int> fontPreference, contrastPreference;
     private GUIStyle bodyStyle, lineStyle, titleStyle, smallStyle, buttonStyle, tabStyle, inputStyle, surfaceStyle;
     private Texture2D surfaceTexture, inputTexture;
     private Color accent = new(.5f, .85f, 1f, 1f), surface = new(.075f, .095f, .12f, .94f);
-    private int appearanceTeam = int.MinValue, appearanceFont;
+    private int appearanceTeam = int.MinValue, appearanceFont, appearanceContrast;
+    private float contrast = .35f;
     private bool panelOpen, drawingEnabled = true;
     private double nextDrawRetry, releaseUntil;
     private CursorLockMode priorLock; private bool priorCursor;
@@ -211,16 +212,21 @@ public sealed partial class ClientMod
         var p = Player.CurrentPlayer; var team = p == null ? null : p.Team;
         int id = team == null ? -1 : team.Index;
         int font = Math.Clamp(fontPreference?.Value ?? 17, 14, 26);
-        if (bodyStyle != null && id == appearanceTeam && font == appearanceFont) return;
-        ResetAppearance(); appearanceTeam = id; appearanceFont = font;
+        int contrastPct = Math.Clamp(contrastPreference?.Value ?? 35, 10, 70);
+        if (bodyStyle != null && id == appearanceTeam && font == appearanceFont && contrastPct == appearanceContrast) return;
+        ResetAppearance(); appearanceTeam = id; appearanceFont = font; appearanceContrast = contrastPct; contrast = contrastPct / 100f;
         string name = team == null ? "" : team.name;
-        accent = team == null ? new Color(.5f, .85f, 1f, 1) : Color.Lerp(team.TeamColor, Color.white, .15f); accent.a = 1;
-        surface = name == "Team_Alien" ? new Color(.075f, .08f, .025f, .95f) : name == "Team_Human_Centauri" ? new Color(.13f, .035f, .04f, .95f) : new Color(.075f, .095f, .12f, .95f);
-        surfaceTexture = Solid(Color.white); inputTexture = Solid(new Color(surface.r * .5f, surface.g * .5f, surface.b * .5f, 1));
+        // Panel = dark, slightly tinted by faction; accent = the team colour pulled a third of the way to white so that
+        // buttons (surface -> accent by `contrast`) stay readable with white text. The 1.5.1 values (accent at .15,
+        // panels around .08, buttons at .1) made the Centauri panel one dark maroon block.
+        accent = team == null ? new Color(.6f, .88f, 1f, 1) : Color.Lerp(team.TeamColor, Color.white, .35f); accent.a = 1;
+        surface = name == "Team_Alien" ? new Color(.10f, .11f, .045f, .96f) : name == "Team_Human_Centauri" ? new Color(.17f, .06f, .07f, .96f) : new Color(.10f, .12f, .15f, .96f);
+        var input = Color.Lerp(surface, Color.black, .4f); input.a = 1;
+        surfaceTexture = Solid(Color.white); inputTexture = Solid(input);
         surfaceStyle = new GUIStyle(); surfaceStyle.normal.background = surfaceTexture;
         bodyStyle = Text(font); lineStyle = Text(font); lineStyle.richText = true; lineStyle.wordWrap = true;
         titleStyle = Text(font + 3); titleStyle.fontStyle = FontStyle.Bold; titleStyle.normal.textColor = new Color(1f, .97f, .87f, 1);
-        smallStyle = Text(Math.Max(13, font - 3)); smallStyle.normal.textColor = new Color(.8f, .82f, .8f, 1);
+        smallStyle = Text(Math.Max(13, font - 3)); smallStyle.normal.textColor = new Color(.86f, .88f, .86f, 1);
         buttonStyle = Text(font); buttonStyle.alignment = TextAnchor.MiddleLeft; buttonStyle.padding = new RectOffset(10, 8, 4, 4); buttonStyle.wordWrap = false;
         buttonStyle.normal.background = buttonStyle.hover.background = buttonStyle.active.background = buttonStyle.focused.background = surfaceTexture;
         buttonStyle.hover.textColor = buttonStyle.active.textColor = buttonStyle.focused.textColor = Color.white;
@@ -247,7 +253,7 @@ public sealed partial class ClientMod
         {
             bool hover = rect.Contains(Event.current.mousePosition);
             GUI.enabled = oldEnabled && allowed;
-            GUI.color = Color.Lerp(surface, accent, selected ? .35f : hover ? .22f : .1f); GUI.color = new Color(GUI.color.r, GUI.color.g, GUI.color.b, 1);
+            GUI.color = Color.Lerp(surface, accent, selected ? Math.Min(.78f, contrast + .3f) : hover ? Math.Min(.7f, contrast + .15f) : contrast); GUI.color = new Color(GUI.color.r, GUI.color.g, GUI.color.b, 1);
             return GUI.Button(rect, text, style ?? buttonStyle) && allowed;
         }
         finally { GUI.color = oldBackground; GUI.enabled = oldEnabled; }
@@ -503,7 +509,7 @@ public sealed partial class ClientMod
                     if (Button(new Rect(0, cy, width - 4, 36), label, false, ready))
                     {
                         string args = arguments.Trim();
-                        if (args.Length == 0 && (cmd.Arg.Length > 0 || cmd.Choices.Count > 0)) { pickerCmd = cmd; pickerMod = mod; pickerScroll = Vector2.zero; pickerArgs.Clear(); }
+                        if (args.Length == 0 && (cmd.Arg.Length > 0 || cmd.Choices.Count > 0)) { pickerCmd = cmd; pickerMod = mod; pickerScroll = Vector2.zero; pickerArgs.Clear(); pickerMulti.Clear(); }
                         else { AutoClose(mod); SendCommand(args.Length > 0 ? cmd.Text + " " + args : cmd.Text, mod); }
                     }
                 }
@@ -649,19 +655,27 @@ public sealed partial class ClientMod
             widths[c] = w + 18;
         }
         float sum = widths.Sum(), avail = rect.width - 8;
-        if (sum > avail) for (int c = 0; c < cols; c++) widths[c] *= avail / sum;
+        // Wide tables (an AntiCheat report with several reference columns) are squeezed to the page: columns shrink,
+        // cells wrap, and every row takes the height of its tallest cell. Below 85 % the cells drop to the small font.
+        float scale = sum > avail ? avail / sum : 1f;
+        if (scale < 1f) for (int c = 0; c < cols; c++) widths[c] *= scale;
+        var cellStyle = scale < .85f ? smallStyle : bodyStyle;
         if (t.Name.Length > 0) { if (draw) GUI.Label(new Rect(rect.x + 2, y, rect.width - 8, 24), t.Name, lineStyle); y += 24; }
         float x = rect.x + 2;
         if (t.Headers.Count > 0)
         {
-            if (draw) for (int c = 0; c < cols; c++) { if (c < t.Headers.Count) GUI.Label(new Rect(x, y, widths[c], 22), t.Headers[c], smallStyle); x += widths[c]; }
-            y += 22;
+            float h = 22;
+            for (int c = 0; c < t.Headers.Count && c < cols; c++) h = Math.Max(h, smallStyle.CalcHeight(new GUIContent(t.Headers[c]), widths[c] - 4));
+            if (draw) for (int c = 0; c < cols; c++) { if (c < t.Headers.Count) GUI.Label(new Rect(x, y, widths[c] - 2, h), t.Headers[c], smallStyle); x += widths[c]; }
+            y += h + 1;
         }
         foreach (var r in t.Rows)
         {
+            float h = 24;
+            for (int c = 0; c < r.Count && c < cols; c++) h = Math.Max(h, cellStyle.CalcHeight(new GUIContent(r[c]), widths[c] - 4));
             x = rect.x + 2;
-            if (draw) for (int c = 0; c < cols; c++) { if (c < r.Count) GUI.Label(new Rect(x, y, widths[c], 24), r[c], bodyStyle); x += widths[c]; }
-            y += 24;
+            if (draw) for (int c = 0; c < cols; c++) { if (c < r.Count) GUI.Label(new Rect(x, y, widths[c] - 2, h), r[c], cellStyle); x += widths[c]; }
+            y += h + 1;
         }
         return y + 8;
     }
@@ -963,7 +977,7 @@ public sealed partial class ClientMod
             float cy = 0;
             foreach (var line in lines)
             {
-                if (line.changed) Surface(new Rect(0, cy, width - 4, line.h), Color.Lerp(surface, accent, .25f));
+                if (line.changed) Surface(new Rect(0, cy, width - 4, line.h), Color.Lerp(surface, accent, Math.Min(.6f, contrast)));
                 GUI.Label(new Rect(line.style == bodyStyle ? 4 : 12, cy + (line.style == bodyStyle ? 6 : 0), width - 20, line.h), line.text, line.style);
                 cy += line.h;
             }
@@ -1055,6 +1069,7 @@ public sealed partial class ClientMod
     // Argument picker. cmd.Arg is a chain of stages ("player", "team", "map", "ban", "choice"; comma separated); each stage
     // adds one token, the last one sends "<text> <tokens...>". player and team are built locally, the rest from cmd.Choices.
     private Cmd pickerCmd; private Mod pickerMod; private Vector2 pickerScroll; private readonly List<string> pickerArgs = new();
+    private readonly List<string> pickerMulti = new();   // ticked tokens of a "players" stage, in tick order
     private readonly Dictionary<string, string> paramInputs = new(); private long paramInputsSeq = -1;
     private static string[] Stages(Cmd cmd)
     {
@@ -1071,6 +1086,7 @@ public sealed partial class ClientMod
         bool optional = rawStage.EndsWith("?");                       // "<stage>?" may be skipped (must be the last stage)
         string stage = rawStage.TrimEnd('?');
         if (stage == "text") { RenderTextStage(rect, cmd, mod, stages, optional); return; }
+        if (stage == "players") { RenderPlayersStage(rect, cmd, mod, stages, optional); return; }
         string what = stage == "map" ? "a map" : stage == "mode" ? "a game mode" : stage == "ban" ? "a banned player" : stage == "player" ? "a player" : stage == "team" ? "a team" : "an option";
         string collected = pickerArgs.Count > 0 ? " " + string.Join(" ", pickerArgs) : "";
         GUI.Label(new Rect(rect.x, rect.y, rect.width - 220, 30), cmd.Text + collected + "   choose " + what, titleStyle);
@@ -1120,6 +1136,55 @@ public sealed partial class ClientMod
                 cy += 40;
             }
             if (rows.Count == 0) GUI.Label(new Rect(4, 4, rect.width - 28, 40), empty, bodyStyle);
+        }
+        finally { GUI.EndScrollView(); }
+    }
+    // "players" stage: tick any number of players, NEXT sends them as one group of tokens (one per player, in tick
+    // order, the first tick first). "players?" may be skipped with DEFAULT. AntiCheat uses it to pick the suspect and
+    // the reference players in one go, followed by a single duration stage.
+    private void RenderPlayersStage(Rect rect, Cmd cmd, Mod mod, string[] stages, bool optional)
+    {
+        string collected = pickerArgs.Count > 0 ? " " + string.Join(" ", pickerArgs) : "";
+        GUI.Label(new Rect(rect.x, rect.y, rect.width - 330, 30), cmd.Text + collected + "   tick players (" + pickerMulti.Count + " chosen)", titleStyle);
+        if (Button(new Rect(rect.xMax - 100, rect.y, 96, 32), pickerArgs.Count > 0 ? "BACK" : "CANCEL", style: tabStyle))
+        {
+            pickerMulti.Clear();
+            if (pickerArgs.Count > 0) pickerArgs.RemoveAt(pickerArgs.Count - 1); else pickerCmd = null;
+            return;
+        }
+        bool ready = frameReady && pendingSeq < 0 && outgoing.Count == 0;
+        if (Button(new Rect(rect.xMax - 206, rect.y, 100, 32), "NEXT", false, ready && pickerMulti.Count > 0, tabStyle))
+        {
+            pickerArgs.Add(string.Join(" ", pickerMulti)); pickerMulti.Clear(); FinishStage(cmd, mod, stages); return;
+        }
+        if (optional && Button(new Rect(rect.xMax - 312, rect.y, 100, 32), "DEFAULT", false, ready && pickerMulti.Count == 0, tabStyle)) { FinishStage(cmd, mod, stages, skipped: true); return; }
+        float y = rect.y + 40;
+        var names = new List<string>(); var labels = new List<string>();
+        var players = Player.Players; var me = Player.CurrentPlayer;
+        for (int i = 0; i < players.Count; i++)
+        {
+            var p = players[i]; if (p == null) continue;
+            string team = p.Team == null ? "spectator" : p.Team.name.Replace("Team_Human_", "").Replace("Team_", "");
+            names.Add(p.PlayerName ?? ""); labels.Add((p.PlayerName ?? "?") + "   " + team + (p == me ? "   (you)" : ""));
+        }
+        var view = new Rect(rect.x, y, rect.width, rect.yMax - y);
+        float total = names.Count * 40;
+        pickerScroll = GUI.BeginScrollView(view, pickerScroll, new Rect(0, 0, rect.width - 20, Math.Max(total, 1)), false, total > view.height);
+        try
+        {
+            float cy = 0;
+            for (int i = 0; i < names.Count; i++)
+            {
+                string token = TargetToken(names[i], names);
+                int at = pickerMulti.IndexOf(token);
+                string label = (at >= 0 ? (at + 1) + ".   " : "") + labels[i];
+                if (Button(new Rect(0, cy, rect.width - 24, 34), label, at >= 0, ready))
+                {
+                    if (at >= 0) pickerMulti.RemoveAt(at); else pickerMulti.Add(token);
+                }
+                cy += 40;
+            }
+            if (names.Count == 0) GUI.Label(new Rect(4, 4, rect.width - 28, 40), "No players found.", bodyStyle);
         }
         finally { GUI.EndScrollView(); }
     }

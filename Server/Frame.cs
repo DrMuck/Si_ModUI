@@ -32,6 +32,11 @@ namespace SiModUI
             [JsonProperty("m", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Multi;
             // Display order inside the mod: registry commands sort by label (1000); a mod's exported list keeps its own order.
             [JsonProperty("o", DefaultValueHandling = DefaultValueHandling.Ignore)] [System.ComponentModel.DefaultValue(1000)] public int Order = 1000;
+            // Read-only entry: it shows or lists something and changes nothing (status, help, top lists). Set by the mod's
+            // export ("i": true, builder Report), by menu.json ("Info": true/false) or by the server's heuristic (Classify).
+            // The chat directory (/mods) and clients split "do and adjust" from "info" with it.
+            [JsonProperty("i", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Info;
+            [JsonIgnore] public bool InfoSet;
             [JsonIgnore] public MethodInfo Callback;
             internal Cmd Clone() => (Cmd)MemberwiseClone();
         }
@@ -82,7 +87,7 @@ namespace SiModUI
                         }
                         MergeEntry(mod, id, (string)entry["t"] ?? "", entry["a"] != null && (bool)entry["a"], admin,
                             (string)entry["l"], (string)entry["d"], (string)entry["arg"], (string)entry["v"], choices, order,
-                            entry["m"] != null ? (bool?)(bool)entry["m"] : null);
+                            entry["m"] != null ? (bool?)(bool)entry["m"] : null, entry["i"] != null ? (bool?)(bool)entry["i"] : null);
                     }
                     doc.Remove("commands");
                 }
@@ -97,7 +102,7 @@ namespace SiModUI
         // One entry from a mod's export or from the menu.json manifest: a new sub-command of the mod, or decoration (label,
         // description, picker, state) of a command the registry already knows. It cannot turn a player command into an admin
         // one or vice versa. Null fields leave the existing value alone. Admin entries exist only in admin frames.
-        private static void MergeEntry(Mod mod, string source, string text, bool isAdmin, bool viewerAdmin, string label, string desc, string arg, string value, List<string[]> choices, int order, bool? multi = null)
+        private static void MergeEntry(Mod mod, string source, string text, bool isAdmin, bool viewerAdmin, string label, string desc, string arg, string value, List<string[]> choices, int order, bool? multi = null, bool? info = null)
         {
             if (string.IsNullOrEmpty(text) || (isAdmin && !viewerAdmin) || !Protocol.ValidCommandText(text)) return;
             var cmd = mod.Cmds.FirstOrDefault(c => c.Text.Equals(text, StringComparison.OrdinalIgnoreCase));
@@ -114,6 +119,7 @@ namespace SiModUI
             if (arg != null) cmd.Arg = arg;
             if (value != null) cmd.Value = value;
             if (multi != null) cmd.Multi = multi.Value;
+            if (info != null) { cmd.Info = info.Value; cmd.InfoSet = true; }
             if (choices != null) { cmd.Choices = choices; if (cmd.Arg.Length == 0 && choices.Count > 0) cmd.Arg = "choice"; }
             if (fresh) mod.Cmds.Add(cmd);
         }
@@ -129,7 +135,7 @@ namespace SiModUI
                     foreach (var sub in cc.Subs)
                     {
                         if (sub == null || string.IsNullOrEmpty(sub.Text)) continue;
-                        MergeEntry(mod, "menu.json", sub.Text, sub.Admin, admin, sub.Label, sub.Description, sub.Arg, null, sub.Choices, ++order);
+                        MergeEntry(mod, "menu.json", sub.Text, sub.Admin, admin, sub.Label, sub.Description, sub.Arg, null, sub.Choices, ++order, null, sub.Info);
                     }
                 }
         }
@@ -292,6 +298,7 @@ namespace SiModUI
             {
                 mod.Cmds = mod.Cmds.OrderBy(c => c.Admin).ThenBy(c => c.Label, StringComparer.OrdinalIgnoreCase).ToList();
                 if (mod.Id != "_match") mod.Data = ModData(mod.Id, admin, mod);
+                Classify(mod, cfg);
                 mod.Cmds = mod.Cmds.OrderBy(c => c.Admin).ThenBy(c => c.Order).ThenBy(c => c.Label, StringComparer.OrdinalIgnoreCase).ToList();
                 if (mod.Cmds.Count == 0) { mods.Remove(mod.Id); continue; }
                 mod.Hash = ""; mod.Hash = Protocol.ShortHash(JsonConvert.SerializeObject(mod, Formatting.None));
@@ -323,6 +330,7 @@ namespace SiModUI
             var assembly = OwningAssembly(callback);
             string id = assembly?.GetName().Name ?? "unknown";
             if (id == "SilicaAdminMod") id = "Si_AdminMod";
+            if (!admin && assembly == typeof(Frame).Assembly) return;                      // our own /mods chat directory is not a catalog entry
             cfg.Commands.TryGetValue(text, out var cc);
             if (!string.IsNullOrEmpty(cc?.Mod)) id = cc.Mod;                                   // sidecar override
             else if (assembly == null || IsFramework(assembly)) id = cfg.Attribute(text, id);   // DynamicMethod shims cannot be attributed by reflection on Mono
@@ -340,6 +348,7 @@ namespace SiModUI
                 Desc = cc?.Description ?? Plain(description ?? "")
             };
             if (admin && cmd.Desc.Length == 0) cmd.Desc = "Requires admin power " + power + ".";
+            if (cc?.Info != null) { cmd.Info = cc.Info.Value; cmd.InfoSet = true; }
             cmd.Arg = cfg.ArgType(text) ?? "";
             if (cc?.Choices != null && cc.Choices.Count > 0) { cmd.Choices = cc.Choices; if (cmd.Arg.Length == 0) cmd.Arg = "choice"; }
             if (cmd.Arg.Length == 0 && cmd.Choices.Count == 0) InferArgs(cmd, description ?? "");
@@ -482,6 +491,80 @@ namespace SiModUI
             return new KeyValuePair<string, string>(null, assembly?.GetName().Version?.ToString());
         }
         private static string Plain(string text) => Regex.Replace(text ?? "", "<[^>]*>", "").Replace('\n', ' ').Trim();
+
+        // ---- read-only classification (Cmd.Info) ----
+        // Explicit flags win (export "i", menu.json "Info", a whole mod with Category "info"); otherwise a report is
+        // recognised by its text ("/elo top", "/rtsai status", "/stats"), its label ("Status", "Show my aim", "My stats",
+        // "Current map") or the opening of its description ("Shows ...", "Lists ...", "Your ..."). Switch and value rows
+        // (a current value) are settings and never reports.
+        private static readonly HashSet<string> InfoWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        { "status", "help", "top", "list", "log", "stats", "me", "com", "fps", "configs", "mil", "info", "show", "balance", "version", "history", "rank", "ranks", "report" };
+        private static readonly HashSet<string> InfoLabelWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        { "status", "help", "show", "shows", "list", "lists", "top", "my", "report", "logging", "current", "next", "rank", "ranks", "view", "info" };
+        private static readonly string[] InfoDescStarts = { "shows ", "lists ", "displays ", "prints ", "your ", "status ", "the current ", "live " };
+        private static bool LooksLikeInfo(Cmd cmd)
+        {
+            if (cmd.Value != null) return false;
+            var words = (cmd.Text ?? "").Split(' ');
+            if (words.Length > 1 && InfoWords.Contains(words[words.Length - 1])) return true;
+            if (words.Length == 1 && InfoWords.Contains(words[0].TrimStart('/', '!', '.'))) return true;
+            string label = (cmd.Label ?? "").Trim();
+            if (label.Length > 0 && label[0] != '/' && label[0] != '!' && InfoLabelWords.Contains(label.Split(' ')[0])) return true;
+            string desc = (cmd.Desc ?? "").TrimStart();
+            foreach (var s in InfoDescStarts) if (desc.StartsWith(s, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+        private static void Classify(Mod mod, MenuConfig cfg)
+        {
+            bool wholeMod = cfg.Mods.TryGetValue(mod.Id, out var mc) && string.Equals(mc?.Category, "info", StringComparison.OrdinalIgnoreCase);
+            foreach (var cmd in mod.Cmds)
+                if (!cmd.InfoSet) cmd.Info = wholeMod || LooksLikeInfo(cmd);
+            // A bare registered command without declared arguments whose sub-commands are all reports is the mod's own
+            // report as well (/lboard next to /lboard me|com|fps). It takes at least two such siblings: a command with a
+            // single "status" companion (/buy, /buy status) is an action, and the command of a catalog (data.cmd) always is.
+            string catalogCmd = CatalogCommand(mod);
+            foreach (var cmd in mod.Cmds)
+            {
+                if (cmd.Info || cmd.InfoSet || cmd.Admin || cmd.Value != null || (cmd.Arg ?? "").Length > 0 || cmd.Choices.Count > 0 || cmd.Text.Contains(" ")) continue;
+                if (catalogCmd != null && cmd.Text.Equals(catalogCmd, StringComparison.OrdinalIgnoreCase)) continue;
+                var others = mod.Cmds.Where(c => c != cmd && !c.Admin).ToList();
+                if (others.Count >= 2 && others.All(c => c.Info)) cmd.Info = true;
+            }
+        }
+        // data.cmd of a catalog document (/buy, !spawn): the command its buttons send, an action by definition.
+        private static string CatalogCommand(Mod mod)
+        {
+            string raw = mod.Data?.Value?.ToString();
+            if (string.IsNullOrEmpty(raw)) return null;
+            try { var doc = Newtonsoft.Json.Linq.JObject.Parse(raw); return doc["catalog"] != null ? (string)doc["cmd"] : null; }
+            catch { return null; }
+        }
+        // data.enabled == false: the mod's master switch is off (hidden on player tabs, "(off)" for admins, skipped by /mods).
+        internal static bool IsEnabled(Mod mod)
+        {
+            string raw = mod.Data?.Value?.ToString();
+            if (string.IsNullOrEmpty(raw)) return true;
+            try
+            {
+                var e = Newtonsoft.Json.Linq.JObject.Parse(raw)["enabled"];
+                return e == null || e.Type != Newtonsoft.Json.Linq.JTokenType.Boolean || (bool)e;
+            }
+            catch { return true; }
+        }
+        // data.info: the mod's status lines.
+        internal static List<string> InfoLines(Mod mod)
+        {
+            var lines = new List<string>();
+            string raw = mod.Data?.Value?.ToString();
+            if (string.IsNullOrEmpty(raw)) return lines;
+            try
+            {
+                if (Newtonsoft.Json.Linq.JObject.Parse(raw)["info"] is Newtonsoft.Json.Linq.JArray arr)
+                    foreach (var t in arr) if (t.Type == Newtonsoft.Json.Linq.JTokenType.String) lines.Add((string)t);
+            }
+            catch { }
+            return lines;
+        }
 
         // Everything the client does not have yet (by per-mod hash), plus ids it should drop.
         internal static string Diff(Result frame, Dictionary<string, string> known, bool same)

@@ -18,8 +18,11 @@ namespace SiModUI
         // documentation for mods that have no ModUIData() export. Same shape as the export entries, minus the state.
         // AdminOnly: a registered PLAYER command whose handler checks the admin power itself (Formation's tuning knobs); shown in the
         // admin frames only, as an admin entry, and never to players.
-        public sealed class CommandConfig { public string Label; public string Description; public string Mod; public string Arg; public List<string[]> Choices; public List<SubConfig> Subs; public bool AdminOnly; }
-        public sealed class SubConfig { public string Text; public string Label; public string Description; public bool Admin; public string Arg; public List<string[]> Choices; }
+        // Info: true marks a command (or sub) as a read-only report, false as an action; null leaves it to the server's heuristic
+        // (text, label and description words). /mods and the clients split "do and adjust" from "info" with it. A whole mod goes
+        // to the info side with Category "info".
+        public sealed class CommandConfig { public string Label; public string Description; public string Mod; public string Arg; public List<string[]> Choices; public List<SubConfig> Subs; public bool AdminOnly; public bool? Info; }
+        public sealed class SubConfig { public string Text; public string Label; public string Description; public bool Admin; public string Arg; public List<string[]> Choices; public bool? Info; }
         private static readonly Dictionary<string, string> SeedArg = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             { "!kick", "player" }, { "!kickban", "player" }, { "!ban", "player" }, { "!mute", "player" }, { "!unmute", "player" }, { "!silence", "player" }, { "!unsilence", "player" },

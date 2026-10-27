@@ -1,0 +1,25 @@
+Si_ModUI client 1.5.1 - in-game mod menu for Silica servers running Si_ModUI_Server
+=====================================================================================
+
+Needs: Silica (Steam, Windows) with MelonLoader 0.7.3 installed.
+Full guide with screenshots and troubleshooting: Silica_ModMenu_Client_Install_Guide.pdf (in this zip).
+
+1. Install MelonLoader 0.7.3
+   - Get MelonLoader.Installer.exe from https://github.com/LavaGang/MelonLoader/releases/latest
+   - Select Silica (or pick Silica.exe in your Silica folder), version 0.7.3, Install.
+   - Start Silica once from Steam, wait for the main menu (first start takes minutes), quit.
+
+2. Install the menu
+   - Copy Mods\Si_ModUI.dll from this zip into <your Silica folder>\Mods
+     (Steam > Silica > Manage > Browse local files shows the folder).
+   - Remove an old Si_SquadHUD.dll or Davey's Si_ClientModUI.dll from Mods: only one menu mod at a time.
+
+3. Play
+   - Join the server, press F6. Escape or CLOSE closes the menu.
+   - No menu? The server has no Si_ModUI_Server; type /mods in chat instead.
+
+Game will not start after MelonLoader: delete version.dll in the Silica folder, start once, reinstall MelonLoader.
+No version.dll after the install: your antivirus removed it; add the Silica folder to its exclusions, reinstall.
+
+Alternative client with more pages (HELP / COMMANDS / MODS / SETTINGS): Davey's Si_ClientModUI,
+https://github.com/daveyvde-1988/Si_ClientModUI/releases/tag/Silica - same server, same F6, install one of the two.
